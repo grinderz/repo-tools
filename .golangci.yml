@@ -1,0 +1,119 @@
+version: "2"
+output:
+  formats:
+    text:
+      path: stdout
+      print-linter-name: true
+      print-issued-lines: true
+linters:
+  default: all
+  disable:
+    - depguard
+    - exhaustruct
+    - godox
+    - gomodguard # deprecated since v2.12.0, replaced by gomodguard_v2
+    - nlreturn
+    - noinlineerr
+    - wsl
+    - wsl_v5 # same style rules as wsl, which upstream replaced it with
+    # This is a CLI: reporting to stdout is the product, and its errors are
+    # read by a human rather than matched by callers.
+    - forbidigo
+    - err113
+    # Tests drive real git repositories on disk and poke unexported helpers.
+    - paralleltest
+    - testpackage
+  settings:
+    cyclop:
+      max-complexity: 20
+    dupl:
+      threshold: 250
+    funlen:
+      lines: 120
+    gocognit:
+      min-complexity: 20
+    interfacebloat:
+      max: 10
+    ireturn:
+      allow:
+        - error
+        - empty
+        - stdlib
+        - anon
+        - generic
+    lll:
+      line-length: 120
+    tagliatelle:
+      case:
+        rules:
+          yaml: snake
+        use-field-name: true
+    varnamelen:
+      ignore-names:
+        - err
+        - ok
+        - id
+        - fn
+        - r
+        - p
+        - c
+        - st
+        - sm
+        - sh
+        - tc
+        - v
+        - m
+        - f
+        - s
+    wrapcheck:
+      ignore-sigs:
+        - .Errorf(
+        - errors.New(
+        - errors.Unwrap(
+        - errors.Join(
+        - .Wrap(
+        - .Wrapf(
+      ignore-package-globs:
+        - github.com/grinderz/repo-tools/*
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+    rules:
+      - linters:
+          - lll
+        source: '^//go:generate '
+      - linters:
+          - dupl
+          - funlen
+          - goconst
+          - gosec
+          - mnd
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - gofumpt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - default
+        - prefix(github.com/grinderz/repo-tools)
+      custom-order: false
+    gofumpt:
+      module-path: github.com/grinderz/repo-tools
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
