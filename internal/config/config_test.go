@@ -324,6 +324,13 @@ projects_dir: /p
 projekts:
   - {name: a, git: g}
 `, "field"},
+		{"deps_check_cmds under a kind that does not exist", `
+projects_dir: /p
+deps_check_cmds:
+  cargo: ["cargo check"]
+projects:
+  - {name: a, git: g}
+`, "deps_check_cmds"},
 	}
 	for _, c := range cases {
 		_, err := Load(write(t, c.body))

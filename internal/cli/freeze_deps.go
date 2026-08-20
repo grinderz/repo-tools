@@ -390,7 +390,7 @@ func freezeSubmodule(rctx *run.Ctx, r gitx.Repo, p *config.Project, sm config.Su
 		return err
 	}
 
-	fmt.Printf("    %s -> %s\n", sm.Path, target)
+	fmt.Printf("    %s -> %s\n", sm.Path, planRef(target))
 
 	return nil
 }
@@ -412,7 +412,7 @@ func commitAndPush(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, msg, n
 	}
 
 	if changed == "" {
-		fmt.Println("    " + noChanges)
+		fmt.Println("    " + run.Dim(noChanges))
 
 		return nil
 	}

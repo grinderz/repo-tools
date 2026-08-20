@@ -147,6 +147,10 @@ func Prompt(question string) (string, error) {
 		return "", fmt.Errorf("read answer: %w", err)
 	}
 
+	// The same air below: whatever runs next starts its own block instead of
+	// hanging off the answered question.
+	fmt.Println()
+
 	return strings.TrimSpace(line), nil
 }
 

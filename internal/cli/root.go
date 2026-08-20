@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/grinderz/repo-tools/internal/config"
+	"github.com/grinderz/repo-tools/internal/gitx"
 	"github.com/grinderz/repo-tools/internal/run"
 )
 
@@ -94,6 +95,7 @@ func NewRoot() *cobra.Command {
 			rctx.FetchFlag = override(fetch, noFetch)
 			rctx.ColorFlag = override(color, noColor)
 			run.SetColor(rctx.UseColor())
+			gitx.SetPlainOutput(!rctx.UseColor())
 
 			reportInputs(path, rctx)
 
@@ -125,7 +127,13 @@ func NewRoot() *cobra.Command {
 	flags.StringSliceVar(&rctx.Skip, "skip", nil, "projects to exclude (comma separated or repeated)")
 
 	root.SetHelpCommand(newHelpCmd(root))
+	addCommands(root, rctx)
 
+	return root
+}
+
+// addCommands builds the grouped command tree.
+func addCommands(root *cobra.Command, rctx *run.Ctx) {
 	root.AddCommand(
 		group("repo", "Inspect and refresh the working copies",
 			newStatusCmd(rctx, "status"),
@@ -133,6 +141,8 @@ func NewRoot() *cobra.Command {
 			newCheckCmd(rctx, "check"),
 			newCleanCmd(rctx, "clean"),
 			newReportCmd(rctx, "report"),
+			newPruneCmd(rctx, "prune"),
+			newExecCmd(rctx, "exec"),
 		),
 		group("changelog", "Generate and publish changelogs",
 			newChangelogCmd(rctx, "update"),
@@ -142,18 +152,26 @@ func NewRoot() *cobra.Command {
 			newReleaseBranchCmd(rctx, "branch"),
 			newRcCmd(rctx, "rc"),
 			newReleaseCmd(rctx, "tag"),
+			newReleaseStatusCmd(rctx, "status"),
+			newReleaseNotesCmd(rctx, "notes"),
+		),
+		group("ci", "Inspect and watch pipelines without pushing",
+			newCIStatusCmd(rctx, "status"),
+			newCIWatchCmd(rctx, "watch"),
 		),
 		group("deps", "Manage submodule pins and language dependencies",
 			newFreezeDepsCmd(rctx, "freeze"),
 			newSubmodulesCmd(rctx, "submodules"),
+			newDepsStatusCmd(rctx, "status"),
+			newDepsCheckCmd(rctx, "check"),
 		),
 		group("git", "Move commits between branches",
 			newCherryPickCmd(rctx, "cherry-pick"),
+			newCompareCmd(rctx, "compare"),
+			newRebaseCmd(rctx, "rebase"),
 		),
 		newFlowCmd(rctx, flowCmdName),
 	)
-
-	return root
 }
 
 // checkDisabled enforces the config's disable list. Every entry is resolved

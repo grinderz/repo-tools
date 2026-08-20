@@ -29,6 +29,7 @@ const (
 	varBranch         = "branch"
 	varProject        = "project"
 	varRt             = "rt"
+	varTask           = "task"
 )
 
 // Lengths used when abbreviating hashes for humans.
@@ -364,7 +365,8 @@ func printCapped(rctx *run.Ctx, text, more string) {
 	}
 
 	fmt.Println(strings.Join(lines[:limit], "\n"))
-	fmt.Printf("... %d more lines (diff_lines: %d), see them with: %s\n", len(lines)-limit, limit, more)
+	fmt.Println(run.Dim(fmt.Sprintf("... %d more lines (diff_lines: %d), see them with: %s",
+		len(lines)-limit, limit, more)))
 }
 
 // pageText hands the text to the pager and reports whether that worked. It
@@ -456,13 +458,26 @@ func shorten(sha string, n int) string {
 }
 
 // messageVars are the placeholders every template gets: which project, which
-// branch, and which product release the run belongs to.
+// branch, which product release the run belongs to, and the ticket id the
+// branch name carries, if any.
 func messageVars(rctx *run.Ctx, p *config.Project, branch string) map[string]string {
 	return map[string]string{
 		varProject:        p.Name,
 		varBranch:         branch,
 		varProductVersion: rctx.Cfg.ProductVersion,
+		varTask:           taskFromBranch(branch),
 	}
+}
+
+// taskRe is a ticket id the way branch names carry one: feat/AB-123 names
+// AB-123. Uppercase on purpose — a looser pattern would read "release-1" out
+// of release-1.4.
+var taskRe = regexp.MustCompile(`[A-Z][A-Z0-9]*-[0-9]+`)
+
+// taskFromBranch is the ticket id in a branch name, empty when there is none
+// — a template using {task} on a plain dev branch renders without it.
+func taskFromBranch(branch string) string {
+	return taskRe.FindString(branch)
 }
 
 // expand replaces {key} placeholders in a message template.

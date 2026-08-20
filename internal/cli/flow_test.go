@@ -97,6 +97,19 @@ func TestFlowsAreValidatedAtStartup(t *testing.T) {
 	}
 }
 
+// The commands a flow cannot express or should never batch are refused at
+// startup with the reason, like every other flow config error.
+func TestFlowRefusesBannedSteps(t *testing.T) {
+	for _, step := range []string{"git cherry-pick", "git rebase", "repo exec", "changelog gen"} {
+		path := flowConfig(t, "flows:\n  rel:\n    - \""+step+"\"\n")
+
+		err := runFlow(path, "repo", "status", "--no-fetch")
+		if err == nil || !strings.Contains(err.Error(), "cannot be a flow step") {
+			t.Errorf("%s: got %v", step, err)
+		}
+	}
+}
+
 // The disable list holds inside a flow too, or it would be a fence with a
 // gate: a dev config that forbids deps freeze forbids it spelled either way.
 func TestFlowHonorsDisabledCommands(t *testing.T) {

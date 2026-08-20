@@ -34,6 +34,15 @@ deps_cmds:
   go:
     - "make deps.update.internal"
 
+# Read-only freshness checks for rt deps check, per deps kind: each command
+# exits non-zero when running the real deps commands would change something.
+# A project can replace its kind's list with its own deps_check_cmds.
+deps_check_cmds:
+  uv:
+    - "uv lock --check"
+  go:
+    - "go mod tidy -diff"
+
 # Where a deps kind keeps the refs of its internal dependencies when those are
 # not submodules. A go project consumes its libraries through go.mod, and the
 # refs they are resolved from live in a make variable that the deps command
@@ -64,6 +73,14 @@ release_tag_message: "release {version}"
 changelog_commit_message: "chore(changelog): update changelog [skip ci]"
 freeze_commit_message: "chore(deps): freeze dependencies for {branch}"
 submodules_commit_message: "chore(deps): update submodules on {branch}"
+# the commit git rebase --submodules adds when a freshly pushed submodule
+# head still has to be pinned by hand
+rebase_pin_commit_message: "chore(deps): pin rebased submodule branches"
+
+# release notes headings; unset keeps the built-ins shown here.
+# notes_section_title additionally takes {tag} — the tag the section covers.
+# notes_header: "# Release {product_version}"
+# notes_section_title: "## {project} {tag}"
 
 # Show the staged diff and ask before every commit. Default true; the --diff
 # and --no-diff flags override it per run.

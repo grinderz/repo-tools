@@ -93,9 +93,10 @@ type Project struct {
 	DevBranch           string            `yaml:"dev_branch"`
 	ChangelogBranch     string            `yaml:"changelog_branch"` // empty = dev_branch
 	Changelog           *bool             `yaml:"changelog"`
-	ChangelogCmds       []string          `yaml:"changelog_cmds"` // replaces the global list
-	ChangelogEnv        map[string]string `yaml:"changelog_env"`  // merged over the global map
-	DepsCmds            []string          `yaml:"deps_cmds"`      // replaces the list of its deps kind
+	ChangelogCmds       []string          `yaml:"changelog_cmds"`  // replaces the global list
+	ChangelogEnv        map[string]string `yaml:"changelog_env"`   // merged over the global map
+	DepsCmds            []string          `yaml:"deps_cmds"`       // replaces the list of its deps kind
+	DepsCheckCmds       []string          `yaml:"deps_check_cmds"` // replaces the list of its deps kind
 	DepsFreeze          *bool             `yaml:"deps_freeze"`
 	ReleaseBranchPrefix string            `yaml:"release_branch_prefix"`
 	// Fetch allows commands to refresh this project's remote refs. Set it to
@@ -164,6 +165,12 @@ type Config struct {
 	// heads on the release branch.
 	DepsPins map[string]DepsPin `yaml:"deps_pins"`
 
+	// DepsCheckCmds holds, per deps kind, the read-only commands deps check
+	// runs to tell whether the dependency files are current — commands that
+	// exit non-zero when running the real ones would change something, like
+	// "go mod tidy -diff" or "uv lock --check".
+	DepsCheckCmds map[string][]string `yaml:"deps_check_cmds"`
+
 	// Disable refuses commands this config has no business running, by their
 	// name under rt ("deps freeze", "release tag"). A group name disables
 	// everything under it. A dev config uses it to keep release-only work out.
@@ -220,7 +227,18 @@ type Config struct {
 	ChangelogCommitMessage  string `yaml:"changelog_commit_message"`
 	FreezeCommitMessage     string `yaml:"freeze_commit_message"`
 	SubmodulesCommitMessage string `yaml:"submodules_commit_message"`
-	ReleaseTagMessage       string `yaml:"release_tag_message"`
+	// RebasePinCommitMessage is the commit git rebase --submodules adds when
+	// a freshly pushed submodule head still has to be pinned by hand — the
+	// pins no rebase conflict already refreshed.
+	RebasePinCommitMessage string `yaml:"rebase_pin_commit_message"`
+	ReleaseTagMessage      string `yaml:"release_tag_message"`
+
+	// NotesHeader and NotesSectionTitle shape the release notes document:
+	// the first line of the whole document, and the heading of each
+	// project's section ({tag} is the tag the section describes). Unset
+	// keeps the built-in headings.
+	NotesHeader       string `yaml:"notes_header"`
+	NotesSectionTitle string `yaml:"notes_section_title"`
 
 	Defaults Defaults   `yaml:"defaults"`
 	Projects []*Project `yaml:"projects"`
@@ -248,6 +266,20 @@ func (c *Config) DepsCommands(p *Project) []string {
 	}
 
 	return c.DepsCmds[p.Deps]
+}
+
+// DepsCheckCommands returns the freshness checks to run for this project: its
+// own list when it has one, otherwise the list its deps kind names.
+func (c *Config) DepsCheckCommands(p *Project) []string {
+	if len(p.DepsCheckCmds) > 0 {
+		return p.DepsCheckCmds
+	}
+
+	if p.Deps == DepsNone {
+		return nil
+	}
+
+	return c.DepsCheckCmds[p.Deps]
 }
 
 // DepsKinds lists the configured deps kinds, sorted, for error messages.
@@ -319,6 +351,17 @@ func (c *Config) DepsPinsFor(p *Project) (DepsPin, bool) {
 	pin, ok := c.DepsPins[p.Deps]
 
 	return pin, ok
+}
+
+// RebasePinMessage is the commit message of the re-pin commit git rebase
+// --submodules makes; an accessor rather than a Load-time default, so a Ctx
+// built without Load still commits with something sensible.
+func (c *Config) RebasePinMessage() string {
+	if c.RebasePinCommitMessage != "" {
+		return c.RebasePinCommitMessage
+	}
+
+	return "chore(deps): pin rebased submodule branches"
 }
 
 // PagerCommand is the pager to show reviews through, empty for none.
@@ -536,6 +579,10 @@ func (c *Config) applyDefaults() error {
 		return err
 	}
 
+	if err := c.validateDepsCheckCmds(); err != nil {
+		return err
+	}
+
 	if err := c.validateProductVersion(); err != nil {
 		return err
 	}
@@ -572,6 +619,9 @@ func (c *Config) validateProductVersion() error {
 		"changelog_commit_message":  {c.ChangelogCommitMessage},
 		"freeze_commit_message":     {c.FreezeCommitMessage},
 		"submodules_commit_message": {c.SubmodulesCommitMessage},
+		"rebase_pin_commit_message": {c.RebasePinCommitMessage},
+		"notes_header":              {c.NotesHeader},
+		"notes_section_title":       {c.NotesSectionTitle},
 		"changelog_cmds":            c.ChangelogCmds,
 		"changelog_env":             slices.Sorted(maps.Values(c.ChangelogEnv)),
 	}
@@ -601,6 +651,19 @@ func (c *Config) validateDepsPins() error {
 
 		if pin.File == "" || pin.Var == "" {
 			return fmt.Errorf("deps_pins: %s: file and var are both required", kind)
+		}
+	}
+
+	return nil
+}
+
+// validateDepsCheckCmds keeps deps_check_cmds keyed by kinds that exist: a
+// check under a misspelled kind would silently never run.
+func (c *Config) validateDepsCheckCmds() error {
+	for _, kind := range slices.Sorted(maps.Keys(c.DepsCheckCmds)) {
+		if _, ok := c.DepsCmds[kind]; !ok {
+			return fmt.Errorf("deps_check_cmds: %q is not a deps_cmds kind (defined: %s)",
+				kind, strings.Join(c.DepsKinds(), ", "))
 		}
 	}
 

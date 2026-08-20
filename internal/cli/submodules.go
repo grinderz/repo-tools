@@ -261,7 +261,7 @@ func updateSubmodules(
 			return withLeftovers(r, err)
 		}
 
-		fmt.Printf("    %s -> head of %s\n", target.Path, target.Branch)
+		fmt.Printf("    %s -> head of %s\n", target.Path, planRef(target.Branch))
 	}
 
 	if !opts.NoDeps {

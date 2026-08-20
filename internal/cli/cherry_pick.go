@@ -252,8 +252,8 @@ func resolveShas(r gitx.Repo, p *config.Project, branch string, shas []string) (
 		}
 
 		if reason := alreadyInBranch(r, branch, full, picked); reason != "" {
-			fmt.Printf("WARNING %s: %s is already in %s (%s), skipping\n",
-				p.Name, shorten(full, shortSHALen), branch, reason)
+			fmt.Printf("%s %s: %s is already in %s (%s), skipping\n",
+				run.Warn(), p.Name, shorten(full, shortSHALen), branch, reason)
 
 			continue
 		}
@@ -292,20 +292,45 @@ func alreadyInBranch(r gitx.Repo, branch, sha string, picked map[string]bool) st
 var pickedFromRe = regexp.MustCompile(`cherry picked from commit ([0-9a-f]{7,40})`)
 
 // alreadyPicked collects source hashes recorded by cherry-pick -x in branch.
-// Only the commits the branch does not share with the dev branch can carry such
-// a trailer, and reading just those keeps this off the whole history.
 func alreadyPicked(r gitx.Repo, p *config.Project, branch string) (map[string]bool, error) {
-	out, err := r.Git("log", "--no-merges", "--format=%B", "origin/"+p.DevBranch+"..origin/"+branch)
+	pairs, err := pickedPairs(r, p, branch)
 	if err != nil {
 		return nil, err
 	}
 
-	picked := map[string]bool{}
-	for _, m := range pickedFromRe.FindAllStringSubmatch(out, -1) {
-		picked[m[1]] = true
+	picked := make(map[string]bool, len(pairs))
+	for sha := range pairs {
+		picked[sha] = true
 	}
 
 	return picked, nil
+}
+
+// pickedPairs maps each source hash recorded by a cherry-pick -x trailer in
+// branch to the commit carrying the trailer. Only the commits the branch does
+// not share with the dev branch can carry one, and reading just those keeps
+// this off the whole history. NUL-separated records survive multi-line bodies.
+func pickedPairs(r gitx.Repo, p *config.Project, branch string) (map[string]string, error) {
+	out, err := r.Git("log", "--no-merges", "-z", "--format=%H"+fieldSep+"%B",
+		"origin/"+p.DevBranch+"..origin/"+branch)
+	if err != nil {
+		return nil, err
+	}
+
+	pairs := map[string]string{}
+
+	for record := range strings.SplitSeq(out, "\x00") {
+		sha, body, ok := strings.Cut(record, fieldSep)
+		if !ok {
+			continue
+		}
+
+		for _, m := range pickedFromRe.FindAllStringSubmatch(body, -1) {
+			pairs[m[1]] = sha
+		}
+	}
+
+	return pairs, nil
 }
 
 // candidates returns dev-branch commits missing from the release branch:
@@ -434,7 +459,7 @@ func pickOne(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, sha string) 
 
 	out, err := r.Git("cherry-pick", "-x", sha)
 	if err == nil {
-		fmt.Printf("    picked %s\n", short)
+		fmt.Printf("    picked %s\n", planHash(short))
 
 		return nil
 	}
@@ -464,7 +489,7 @@ func pickOne(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, sha string) 
 		return fmt.Errorf("cherry-pick --continue failed for %s: %w", short, contErr)
 	}
 
-	fmt.Printf("    picked %s (submodule pins resolved from the release freeze)\n", short)
+	fmt.Printf("    picked %s (submodule pins resolved from the release freeze)\n", planHash(short))
 
 	return nil
 }
@@ -584,7 +609,7 @@ func repinSubmodule(rctx *run.Ctx, r gitx.Repo, p *config.Project, path string) 
 		return err
 	}
 
-	fmt.Printf("    submodule %s: dev pin ignored, re-pinned to head of %s\n", path, branch)
+	fmt.Printf("    submodule %s: dev pin ignored, re-pinned to head of %s\n", path, planRef(branch))
 
 	return nil
 }
@@ -597,9 +622,10 @@ func manualStop(r gitx.Repo, p *config.Project, short string, paths []string) er
 	}
 
 	fmt.Print("the cherry-pick is left in progress, resolve it by hand:\n")
-	fmt.Printf("  cd %s\n", r.Dir)
-	fmt.Print("  git status\n")
-	fmt.Print("  git cherry-pick --continue   # or --abort\n\n")
+	fmt.Println(run.Dim("  cd " + r.Dir))
+	fmt.Println(run.Dim("  git status"))
+	fmt.Println(run.Dim("  git cherry-pick --continue   # or --abort"))
+	fmt.Println()
 
 	return fmt.Errorf("manual conflict resolution required in %s", p.Name)
 }

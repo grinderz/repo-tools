@@ -110,12 +110,12 @@ func checkChangelog(rctx *run.Ctx, r gitx.Repo, p *config.Project) []string {
 
 func report(name string, issues []string) {
 	if len(issues) == 0 {
-		fmt.Printf("%-20s ok\n", name)
+		fmt.Printf("%-20s %s\n", name, run.Green("ok"))
 
 		return
 	}
 
-	fmt.Printf("%-20s %d issue(s)\n", name, len(issues))
+	fmt.Printf("%-20s %s\n", name, run.Yellow(fmt.Sprintf("%d issue(s)", len(issues))))
 
 	for _, i := range issues {
 		fmt.Printf("  - %s\n", i)

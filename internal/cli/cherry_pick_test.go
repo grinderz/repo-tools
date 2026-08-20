@@ -15,10 +15,16 @@ import (
 // TestMain allows file:// submodules for every git process started by the
 // tests, including the ones the production code spawns.
 func TestMain(m *testing.M) {
+	// The identity covers repositories the tests never configure directly,
+	// like the clones git creates for submodules.
 	env := map[string]string{
-		"GIT_CONFIG_COUNT":   "1",
+		"GIT_CONFIG_COUNT":   "3",
 		"GIT_CONFIG_KEY_0":   "protocol.file.allow",
 		"GIT_CONFIG_VALUE_0": "always",
+		"GIT_CONFIG_KEY_1":   "user.email",
+		"GIT_CONFIG_VALUE_1": "rt@example.com",
+		"GIT_CONFIG_KEY_2":   "user.name",
+		"GIT_CONFIG_VALUE_2": "repo-tools test",
 	}
 	for k, v := range env {
 		if err := os.Setenv(k, v); err != nil {

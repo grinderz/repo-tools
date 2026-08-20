@@ -66,6 +66,12 @@ deps_pins:                    # internal refs that are not submodules
     file: Makefile
     var: GO_DEPS_UPDATE_INTERNAL
 
+deps_check_cmds:              # freshness checks for rt deps check
+  uv:
+    - "uv lock --check"
+  go:
+    - "go mod tidy -diff"
+
 disable:                      # commands this config must not run
   - "deps freeze"
 
@@ -104,19 +110,28 @@ not a string. The error says so.
 
 **Placeholders.** Not every template takes every one:
 
-| Template | `{project}` | `{branch}` | `{product_version}` | `{version}` | `{commits}` | `{rt}` |
-|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| `rc_tag_message`, `release_tag_message` | ✓ | ✓ | ✓ | ✓ | ✓ | |
-| `changelog_commit_message` | ✓ | ✓ | ✓ | | | |
-| `freeze_commit_message` | ✓ | ✓ | ✓ | | | |
-| `submodules_commit_message` | ✓ | ✓ | ✓ | | | |
-| `changelog_cmds`, `changelog_env` | ✓ | ✓ | ✓ | | | ✓ |
+| Template | `{project}` | `{branch}` | `{task}` | `{product_version}` | `{version}` | `{commits}` | `{rt}` |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| `rc_tag_message`, `release_tag_message` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | |
+| `changelog_commit_message` | ✓ | ✓ | ✓ | ✓ | | | |
+| `freeze_commit_message` | ✓ | ✓ | ✓ | ✓ | | | |
+| `submodules_commit_message` | ✓ | ✓ | ✓ | ✓ | | | |
+| `rebase_pin_commit_message` | ✓ | ✓ | ✓ | ✓ | | | |
+| `notes_header` | | | | ✓ | | | |
+| `notes_section_title` | ✓ | ✓ | ✓ | ✓ | | | |
+| `changelog_cmds`, `changelog_env` | ✓ | ✓ | ✓ | ✓ | | | ✓ |
+| `repo exec` command | ✓ | ✓ | ✓ | ✓ | | | ✓ |
 
 `{branch}` is the branch being committed to or tagged. `{version}` is the
 computed tag itself — `1.26.0-rc.2`, not the `X.Y` of the branch — which is why
 it exists only where a tag is being made; a commit is made on a branch and has
 no version. `{rt}` is the path of the running binary, so a changelog command can
-call back into it without `rt` being on `PATH`. An unknown placeholder is left
+call back into it without `rt` being on `PATH`. `{task}` is the ticket id
+parsed out of the branch name — `feat/AB-123` renders it as `AB-123` — so a
+commit message template like `"build/{task}: pin rebased submodules"` carries
+the real ticket. The pattern is an uppercase id (`AB-123`), which is what
+keeps `release-1.4` from reading as a ticket; a branch without one renders
+`{task}` empty. An unknown placeholder is left
 in the text as written rather than blanked out.
 
 **Product version.** `product_version` names the release the whole set of
@@ -186,6 +201,13 @@ the release that was just refused. Every step is resolved before any runs —
 and the whole `flows:` block is resolved on every rt start, like `disable` —
 so a typo, a group name or a nested flow is a config error found today, not on
 release day; a `disable`d command stops the flow when it would actually run.
+A few commands are refused as flow steps outright, with the reason in the
+error: `git cherry-pick` (needs one project and a choice of commits),
+`git rebase` (would force-push whatever branch each project has checked
+out), `repo exec` (the command after `--` cannot be written in a step) and
+`changelog gen` (prints one repository's document, works outside the
+config). `rt flow` without a name lists the flows the config defines, steps
+and all, marking any step the disable list would block.
 
 **A push can be watched to the end of its pipeline.** A project with
 `ci: gitlab` or `ci: github` gets the pipeline of every pushed commit and tag
@@ -484,15 +506,25 @@ Commands are grouped by what they act on:
 | `rt repo sync` | clones missing projects, fetches, fast-forwards the dev branch |
 | `rt repo clean` | discards uncommitted changes and restores submodule pins |
 | `rt repo report` | prints a markdown table of the projects, columns from the config |
+| `rt repo prune` | deletes local branches that are safe to lose: gone upstreams, stale release leftovers |
+| `rt repo exec` | runs one shell command in every project, through direnv |
 | `rt changelog update` | runs `changelog_cmds`, commits and pushes if files changed |
 | `rt changelog gen` | prints the plain git-log changelog of one repository |
 | `rt release branch` | creates `release-X.Y` from the dev branch; an existing branch is a warning, a local leftover of a failed push is reused |
 | `rt release rc` | tags `X.Y.Z-rc.N` on the release branch and pushes; a head already tagged is a skip |
 | `rt release tag` | tags the final `X.Y.Z` and pushes |
+| `rt release status` | one line per project: branch, freeze state, pins drift, rc/final tags, head, compare counters, pipeline |
+| `rt release notes` | prints markdown release notes: per project, what its latest tag added |
 | `rt deps freeze` | pins submodules to release branches, updates deps, commits and pushes |
 | `rt deps submodules` | moves every submodule to the head of the branch it already tracks |
+| `rt deps status` | shows how far submodule pins and module pins have drifted from their branches |
+| `rt deps check` | runs the kind's freshness checks (`go mod tidy -diff`, `uv lock --check`) |
 | `rt git cherry-pick` | moves commits from the dev branch into the release branch, chosen by hash, by ticket, or from a list |
-| `rt flow <name>` | runs the command sequence the config defines under that name |
+| `rt git compare` | shows how the dev and release branches differ: still to pick, release-only, already in both |
+| `rt git rebase` | rebases a branch onto its target, auto-resolving conflicting submodule pins |
+| `rt ci status` | shows the pipeline state of each project's head, or of any `--ref` |
+| `rt ci watch` | attaches the usual pipeline watch to a revision already on origin |
+| `rt flow <name>` | runs the command sequence the config defines under that name; without a name, lists the flows |
 
 Release branches are never merged back into the dev branch. Fixes land in the
 dev branch and travel to the release branch through `rt git cherry-pick`.
@@ -505,6 +537,7 @@ rt repo check                      # config against the working copies
 
 rt release branch                  # cut release-X.Y from dev
 rt deps freeze                     # pin submodules, update deps, commit, push
+rt deps check                      # dependency files still tidy after the freeze?
 rt release rc                      # tag X.Y.0-rc.1
 
 rt git cherry-pick api --task AB-3151   # a fix arrives in dev
@@ -531,7 +564,27 @@ rt repo sync                    # clone missing, fetch, fast-forward dev
 rt repo sync --no-pull          # fetch only, leave the dev branch where it is
 rt repo clean api               # throw away uncommitted changes in one project
 rt repo clean --untracked       # and delete files git does not track
+rt repo prune                   # delete local branches that are safe to lose
+rt repo exec -- git gc          # one shell command in every project
 ```
+
+`rt repo prune` deletes, per project, the local branches nothing would miss:
+branches whose upstream is gone from origin but whose commits some remote
+branch still carries, and local release branches sitting at or behind their
+origin counterpart with no commits of their own — the leftovers failed pushes
+and finished releases accumulate. The current branch and the dev branch are
+never touched, and a branch with commits nobody else has is kept and named
+(`inspect it first`), not deleted. It fetches with `--prune` first and shows
+the usual plan before anything goes.
+
+`rt repo exec [project...] -- <command...>` runs the command after `--` in
+each project's directory, through direnv where there is an `.envrc` — the
+project's own environment, the way its deps and changelog commands run.
+`{project}`, `{branch}` (the target branch), `{product_version}` and `{rt}`
+expand per project first, so
+`rt repo exec -- echo "{project} works on {branch}"` and calling back into
+rt via `{rt}` both work. The command is arbitrary, so it plans and confirms
+like any destructive step.
 
 ```sh
 rt repo report                  # markdown table: one row per project
@@ -578,6 +631,73 @@ rt release tag --tag 1.4.7                 # an explicit tag instead
 
 `--release-branch` and `--tag` work on both `rt release rc` and
 `rt release tag`.
+
+### release status
+
+```sh
+rt release status                          # the whole release at a glance
+rt release status api worker               # only these projects
+rt release status --release-branch release-1.4
+```
+
+The dashboard for "what is left": one line per project with the release
+branch (or `pending` before `rt release branch` ran), whether the freeze on
+that branch matches the config (`ok` / `stale(n)`, with the stale submodules
+listed under the row), whether every pin sits at the head of its branch
+(`pins`: `ok` / `drift(n)` — `rt deps status` folded into one cell, drifted
+pins listed under the row), the line's highest rc and final tag, the head state
+(`tagged`, or `+N commits` since the last tag — what the next rc would ship),
+`rt git compare`'s counters as `dev/rel/both` — commits only in the dev
+branch (pending cherry-picks, yellow while there are any), only in the
+release branch, and in both — and the head pipeline's state via glab/gh. A
+failed pipeline's URL gets a detail line. Fetches first; a project whose
+fetch fails is skipped rather than reported from stale refs. `--no-ci`
+blanks the pipeline column.
+
+### ci
+
+```sh
+rt ci status                     # pipeline of every project's head
+rt ci status api                 # one project
+rt ci status api --ref 1.4.0     # a tag's pipeline
+rt ci watch api                  # follow the head pipeline to the end
+rt ci watch api --ref release-1.4
+```
+
+The push commands watch their own pipelines; these two look without pushing.
+`ci status` asks once and prints one line per project — state, label,
+progress, and the URL when something needs attention. `ci watch` attaches the
+usual watch — poll interval, job progress, `ci_retries` included — to a
+revision already on origin: for picking a watch back up after an aborted run,
+a manual push, or before the final tag. The default revision is the project's
+target branch head; `--ref` takes any branch on origin or any tag. Projects
+with `ci: none` are reported as not configured and skipped. A failed pipeline
+fails `ci watch` (after the retries); `ci status` only reports and always
+exits 0.
+
+### release notes
+
+```sh
+rt release notes                           # the whole release as one document
+rt release notes api worker                # only these projects
+rt release notes --release-branch release-1.4
+```
+
+Prints the release as one markdown document, ready to paste into an
+announcement: a heading from `product_version`, then one section per project
+with the highest tag of its release line and the commits that tag added since
+the line's previous tag. The first tag of a line counts from the previous
+release line — which is the release — and a repository's very first tag from
+what the release branch has over the dev branch, i.e. the cherry-picks.
+States like a missing clone or an untagged line become italic notes rather
+than errors, so the document always renders whole. Read-only; `--fetch` is
+opt-in like the other paste-ready reports.
+
+The headings are templates: `notes_header` shapes the document's first line
+(default `# Release {product_version}`, or `# Release notes` without a
+product version) and `notes_section_title` each section's heading (default
+`## {project} {tag}`; `{tag}` is the tag the section covers). A section that
+carries a note instead of a tag keeps the plain project heading.
 
 ### changelog
 
@@ -689,6 +809,53 @@ in `.gitmodules` is left alone and reported, since `--remote` would otherwise
 follow whatever the remote's default branch is — run `rt deps freeze` to give it
 one. A project whose pins are already current says so and commits nothing.
 
+### deps status
+
+```sh
+rt deps status                    # every project, against its target branch
+rt deps status api worker         # only these
+```
+
+The read-only answer to "is a `deps submodules` or `deps freeze` run due".
+For every submodule that tracks a branch: the recorded pin against the head
+of that branch, inside the submodule's own clone — `ok`, `behind N
+commit(s)`, or `diverged` when the pin is not on the branch at all. For every
+`module@ref` of the deps kind's pin variable: whether the ref is the branch
+this config would freeze it to, and how far the version `go.mod` actually
+resolved is behind that branch's head in the provider project's clone — a
+pseudo-version is compared by the commit baked into it, a released version
+through its tag.
+
+Everything is read at origin's view of the target branch, so it reports what
+is committed, not what a working tree happens to contain. Fetches first —
+the submodules and the providers too, each provider once per run.
+
+### deps check
+
+```sh
+rt deps check                     # every project
+rt deps check api                 # one project
+```
+
+Runs the deps kind's freshness checks from `deps_check_cmds` in each
+project's working copy, through direnv where there is an `.envrc` — the same
+way `deps freeze` runs the real commands. A check that exits non-zero marks
+the project stale and its output says why; the run then fails naming how many
+projects need attention. The commands are the config's, nothing about a
+language is built in:
+
+```yaml
+deps_check_cmds:
+  uv:
+    - "uv lock --check"           # uv.lock still matches pyproject.toml?
+  go:
+    - "go mod tidy -diff"         # go.mod/go.sum still tidy? (Go >= 1.23)
+```
+
+A project can replace its kind's list with its own `deps_check_cmds`; a kind
+with no checks is skipped. Keys must be `deps_cmds` kinds, anything else is a
+config error.
+
 ### git cherry-pick
 
 ```sh
@@ -756,6 +923,92 @@ described above. Conflicts are handled as follows:
   of a raw git error.
 - **anything else** — the run stops with the cherry-pick left in progress and
   prints the repository to resolve it in. Other projects are not touched.
+
+### git compare
+
+```sh
+rt git compare                            # every project
+rt git compare api worker                 # only these
+rt git compare --task AB-3151             # one ticket's fate across the repos
+rt git compare --since 2026-08-01         # only recent commits
+rt git compare --release-branch release-1.4
+```
+
+The overview to read before a cherry-pick session. For each project the
+commits made since the dev and release branches diverged are sorted into three
+groups, oldest first:
+
+- **only in the dev branch** — the cherry-pick candidates, exactly what
+  `rt git cherry-pick --list` would offer;
+- **only in the release branch** — the release's own commits: dependency
+  freezes, version bumps, direct hotfixes;
+- **in both** — already carried over, shown once from the dev side. A commit
+  brought over by `cherry-pick -x` names its release copy
+  (`picked as ff00aa1…`), even when conflict resolution changed the patch; a
+  change applied to both branches independently says `equivalent patch`.
+
+It fetches first so the picture is origin's, not the clone's; a project whose
+fetch fails is skipped with a warning rather than compared against stale refs.
+Common history from before the branch point stays out entirely. The filters
+are the cherry-pick ones and narrow every group, so `--task AB-3151` answers
+"has this ticket reached the release yet?" across all projects at once.
+
+### git rebase
+
+```sh
+rt git rebase api                          # rebase what api has checked out
+rt git rebase api --branch feat/AB-3151    # a named branch
+rt git rebase api --onto main              # onto something other than the target branch
+rt git rebase api --no-push                # keep the result local
+rt git rebase api --submodules             # rebase & push the submodule branches first
+```
+
+Rebases `--branch` (default: whatever the project has checked out) onto
+`--onto` (default: the project's target branch) and resolves conflicting
+submodule pointers automatically — the local twin of the CI submodule-rebase
+job, for the rebase an MR asks for after the target branch moved a pin.
+
+A conflicted submodule is pinned to the freshly fetched head of its matching
+branch: the branch named like the branch being rebased when the submodule
+has one (cross-repo feature work), otherwise the branch it tracks in
+`.gitmodules`. Re-fetching means a submodule branch that was itself rebased
+is picked up at its current state, not at the stale commit the superproject
+still points to.
+
+Safety rules, same as the job's: the pin coming from the rebase target must
+be reachable from the head being pinned — otherwise the submodule branch is
+not rebased onto its own target yet, and resolving here would drop commits
+(`rebase the submodule branch first`); when falling back to the tracked
+branch, the pin from the rebased commit must be reachable too. A commit that
+becomes empty after resolving is skipped with a warning. Release branches
+are refused outright: fixes reach them through `rt git cherry-pick`, never
+by rebasing.
+
+What the automation refuses to resolve — a conflict outside a submodule, a
+pin the chosen branch has not absorbed — aborts the rebase by default,
+leaving the branch exactly where it was. On a terminal there is a choice:
+answer yes to `Keep the rebase in progress for manual resolution?` and
+finish the conflict by hand with every submodule pin resolved so far kept —
+the commands to continue are printed.
+
+Before the push the rebased commits are listed and, when origin already has
+the branch, `git range-diff` shows how the rebase changed the patches —
+resolved pins included — through the usual pager. The push itself is
+`--force-with-lease`, after a confirmation; `--no-push` keeps the result
+local and prints the push command instead.
+
+`--submodules` does the cross-repo half too: before the parent, every
+submodule branch named like the one being rebased is itself rebased onto the
+branch that submodule tracks in `.gitmodules` on the target side —
+recursively, deepest first — and force-pushed after its own confirmation.
+The parent rebase then picks the fresh heads up through the usual pin
+resolution, and a pin no conflict refreshed is re-pinned and committed
+(`rebase_pin_commit_message`, default
+`chore(deps): pin rebased submodule branches`), so the branch never points
+at commits the force-push just orphaned. The submodule pushes happen even
+under `--no-push`: a local-only submodule rebase would leave the parent
+pinning commits origin has never seen. A rerun skips a submodule branch
+already on top and already pushed.
 
 ## Tests and linting
 

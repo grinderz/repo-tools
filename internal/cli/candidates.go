@@ -128,8 +128,33 @@ func candidatesFor(r gitx.Repo, p *config.Project, branch string, filter pickFil
 		isMissing[sha] = true
 	}
 
-	// One log call describes the whole range, in the order picks have to run.
-	// The date window, if any, is git's job.
+	cands, err := rangeLog(r, "origin/"+branch+".."+"origin/"+p.DevBranch, filter)
+	if err != nil {
+		return candidateSet{}, err
+	}
+
+	set := candidateSet{Picking: make([]candidate, 0, len(missing))}
+
+	for _, cand := range cands {
+		if !filter.matches(cand.Subject) {
+			continue
+		}
+
+		if isMissing[cand.SHA] {
+			set.Picking = append(set.Picking, cand)
+		} else {
+			set.AlreadyInSync++
+		}
+	}
+
+	return set, nil
+}
+
+// rangeLog lists the commits of one range, oldest first — the order picks have
+// to run in — one candidate per commit. The filter's date window, if any, is
+// git's job; the subject terms are the caller's, since only it knows whether a
+// non-match is dropped or just counted.
+func rangeLog(r gitx.Repo, rng string, filter pickFilter) ([]candidate, error) {
 	args := []string{
 		"log", "--no-merges", "--reverse", "--no-color",
 		"--format=%H" + fieldSep + "%h" + fieldSep + "%an" + fieldSep + "%s",
@@ -143,12 +168,12 @@ func candidatesFor(r gitx.Repo, p *config.Project, branch string, filter pickFil
 		args = append(args, "--until="+filter.Until)
 	}
 
-	lines, err := r.Lines(append(args, "origin/"+branch+".."+"origin/"+p.DevBranch)...)
+	lines, err := r.Lines(append(args, rng)...)
 	if err != nil {
-		return candidateSet{}, err
+		return nil, err
 	}
 
-	set := candidateSet{Picking: make([]candidate, 0, len(missing))}
+	out := make([]candidate, 0, len(lines))
 
 	for _, line := range lines {
 		parts := strings.SplitN(line, fieldSep, logFields)
@@ -156,19 +181,10 @@ func candidatesFor(r gitx.Repo, p *config.Project, branch string, filter pickFil
 			continue
 		}
 
-		cand := candidate{SHA: parts[0], Short: parts[1], Author: parts[2], Subject: parts[3]}
-		if !filter.matches(cand.Subject) {
-			continue
-		}
-
-		if isMissing[cand.SHA] {
-			set.Picking = append(set.Picking, cand)
-		} else {
-			set.AlreadyInSync++
-		}
+		out = append(out, candidate{SHA: parts[0], Short: parts[1], Author: parts[2], Subject: parts[3]})
 	}
 
-	return set, nil
+	return out, nil
 }
 
 func shasOf(cands []candidate) []string {

@@ -25,14 +25,21 @@ const flowCmdName = "flow"
 // refused.
 func newFlowCmd(rctx *run.Ctx, name string) *cobra.Command {
 	return &cobra.Command{
-		Use:   name + " <name> [project...]",
+		Use:   name + " [<name> [project...]]",
 		Short: "Run a configured sequence of commands over the same projects",
 		Long: "Run the commands a flow lists in the config, in order, over the same\n" +
 			"projects. Each command behaves exactly as if it were typed by hand:\n" +
 			"it plans, asks and executes on its own. The first failure or declined\n" +
-			"plan stops the flow.",
-		Args: cobra.MinimumNArgs(1),
+			"plan stops the flow.\n\n" +
+			"Without arguments: lists the flows this config defines, steps and all.",
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				listFlows(cmd.Root(), rctx)
+
+				return nil
+			}
+
 			cmds, err := flowCommands(cmd.Root(), rctx, args[0])
 			if err != nil {
 				return err
@@ -57,6 +64,35 @@ func newFlowCmd(rctx *run.Ctx, name string) *cobra.Command {
 
 			return nil
 		},
+	}
+}
+
+// listFlows prints every flow the config defines, so the sequence is readable
+// without opening the yaml. A step the disable list blocks is marked: that
+// flow will refuse to start.
+func listFlows(root *cobra.Command, rctx *run.Ctx) {
+	if len(rctx.Cfg.Flows) == 0 {
+		fmt.Println("the config defines no flows")
+
+		return
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(rctx.Cfg.Flows)) {
+		fmt.Printf("%s %s\n", run.Marker(), run.Bold(name))
+
+		for i, step := range rctx.Cfg.Flows[name] {
+			line := fmt.Sprintf("  %d. %s", i+1, step)
+
+			// Startup validation has already resolved every step; here only
+			// the disable list can still say no.
+			if target, err := resolveFlowStep(root, name, step); err == nil {
+				if checkDisabled(target, rctx.Cfg, rctx.ConfigPath) != nil {
+					line += "  " + run.Yellow("(disabled — this flow will refuse to start)")
+				}
+			}
+
+			fmt.Println(line)
+		}
 	}
 }
 
@@ -102,6 +138,18 @@ func flowCommands(root *cobra.Command, rctx *run.Ctx, name string) ([]*cobra.Com
 	return cmds, nil
 }
 
+// flowBanned names the commands a flow cannot express or should never batch,
+// each with the reason the config error carries. Checked at startup like
+// everything else about flows: found today, not on release day.
+//
+//nolint:gochecknoglobals // a fixed table, same as the command tree itself
+var flowBanned = map[string]string{
+	"git cherry-pick": "it needs one project and a choice of commits, which a flow cannot pass",
+	"git rebase":      "it would force-push whatever branch each project happens to have checked out",
+	"repo exec":       "the command after -- cannot be written in a flow step",
+	"changelog gen":   "it prints one repository's document and works outside the config",
+}
+
 // resolveFlowStep maps one flow entry onto the command tree. It is also what
 // every command runs over the whole flows block at startup, so a typo in a
 // flow is a config error found today, not on release day when the flow first
@@ -121,6 +169,10 @@ func resolveFlowStep(root *cobra.Command, name, step string) (*cobra.Command, er
 
 	if target.RunE == nil {
 		return nil, fmt.Errorf("flow %s: %q is a group, name one of its commands", name, step)
+	}
+
+	if reason, banned := flowBanned[key]; banned {
+		return nil, fmt.Errorf("flow %s: %q cannot be a flow step: %s", name, step, reason)
 	}
 
 	return target, nil

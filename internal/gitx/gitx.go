@@ -326,8 +326,7 @@ func (r Repo) shell(prefix []string, command string, env []string) error {
 
 	cmd := exec.CommandContext(context.Background(), argv[0], argv[1:]...) //nolint:gosec // the config says what to run
 	cmd.Dir = r.Dir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	cmd.Stdout, cmd.Stderr = childStdout(), childStderr()
 
 	if len(env) > 0 {
 		cmd.Env = append(os.Environ(), env...)
