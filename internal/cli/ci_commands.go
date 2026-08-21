@@ -160,7 +160,13 @@ func ciWatchProject(rctx *run.Ctx, p *config.Project, override string) error {
 		return fmt.Errorf("%s: %w", p.Name, err)
 	}
 
-	fmt.Printf("%s %s  %s @ %s\n", run.Cyan("==>"), run.Bold(p.Name), run.Cyan(ref), planHash(shorten(sha, shortSHALen)))
+	fmt.Printf(
+		"%s %s  %s @ %s\n",
+		run.Cyan("==>"),
+		run.Bold(p.Name),
+		run.Cyan(ref),
+		planHash(shorten(sha, shortSHALen)),
+	)
 
 	if err := watchCI(rctx, r, p, sha, ref, ""); err != nil {
 		return fmt.Errorf("%s: %w", p.Name, err)

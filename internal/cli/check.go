@@ -109,16 +109,20 @@ func checkChangelog(rctx *run.Ctx, r gitx.Repo, p *config.Project) []string {
 }
 
 func report(name string, issues []string) {
+	// The padded ==> header keeps the verdict column aligned while the project
+	// name gets the same marker every other per-project block has.
+	header := run.Cyan("==>") + " " + padCell(name, statusNameWidth, run.Bold)
+
 	if len(issues) == 0 {
-		fmt.Printf("%-20s %s\n", name, run.Green("ok"))
+		fmt.Println(header + run.Green("ok"))
 
 		return
 	}
 
-	fmt.Printf("%-20s %s\n", name, run.Yellow(fmt.Sprintf("%d issue(s)", len(issues))))
+	fmt.Println(header + run.Yellow(fmt.Sprintf("%d issue(s)", len(issues))))
 
 	for _, i := range issues {
-		fmt.Printf("  - %s\n", i)
+		fmt.Printf("    - %s\n", i)
 	}
 }
 

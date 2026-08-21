@@ -38,6 +38,9 @@ const (
 	shortPinLen = 8
 )
 
+// gitlinkMode is the file mode of a submodule entry in a git tree.
+const gitlinkMode = "160000"
+
 // errDeclined marks work the operator refused at a review prompt. It covers a
 // commit, a tag, a branch and a discard alike, so it says none of them.
 var errDeclined = errors.New("declined at the review")
@@ -214,7 +217,7 @@ func updateSubmoduleRemote(rctx *run.Ctx, p *config.Project, r gitx.Repo, path, 
 		return fmt.Errorf("submodule %s: origin/%s does not exist", path, branch)
 	}
 
-	if _, err := r.Git("submodule", "update", "--init", "--remote", "--", path); err != nil {
+	if err := moveGitlink(r, sub, path, branch); err != nil {
 		return err
 	}
 
@@ -228,6 +231,41 @@ func updateSubmoduleRemote(rctx *run.Ctx, p *config.Project, r gitx.Repo, path, 
 	}
 
 	if _, err := sub.Git("submodule", "update", "--init", "--recursive"); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// moveGitlink puts the submodule on the head of branch. The usual way is
+// "submodule update --remote", but on a gitlink left unmerged by a
+// cherry-pick that command skips the path with exit code 0 ("Skipping
+// unmerged submodule"), and the add that follows would record whatever
+// commit the submodule worktree happens to sit on — a stale pin. That case
+// is resolved by hand: the index entry to the branch head, the worktree to
+// match.
+func moveGitlink(r, sub gitx.Repo, path, branch string) error {
+	unmerged, err := r.Git("ls-files", "-u", "--", path)
+	if err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(unmerged) == "" {
+		_, err := r.Git("submodule", "update", "--init", "--remote", "--", path)
+
+		return err
+	}
+
+	head, err := sub.Git("rev-parse", "refs/remotes/origin/"+branch)
+	if err != nil {
+		return err
+	}
+
+	if _, err := sub.Git("checkout", "--quiet", "--detach", head); err != nil {
+		return err
+	}
+
+	if _, err := r.Git("update-index", "--cacheinfo", gitlinkMode+","+head+","+path); err != nil {
 		return err
 	}
 
@@ -666,8 +704,9 @@ func remoteGit(rctx *run.Ctx, r gitx.Repo, args ...string) error {
 
 		if rctx.Interactive() {
 			// The whole output, not a one-line summary: "failed to push some
-			// refs" once hid the rejected tag that was the actual problem.
-			fmt.Println("\n" + run.Dim(indentLines(gitOutput(err))))
+			// refs" once hid the rejected tag that was the actual problem. No
+			// blank line above: the answered push question already left one.
+			fmt.Println(run.Dim(indentLines(gitOutput(err))))
 
 			retry, askErr := run.ConfirmYes(fmt.Sprintf(
 				"git %s failed — touch the key if it was waiting. Retry?", args[0]))

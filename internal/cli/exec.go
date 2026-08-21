@@ -30,7 +30,9 @@ func newExecCmd(rctx *run.Ctx, name string) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			dash := cmd.ArgsLenAtDash()
 			if dash < 0 || dash == len(args) {
-				return errors.New("usage: " + cmdLabel(cmd) + " [project...] -- <command...>") //nolint:err113 // usage line
+				return errors.New(
+					"usage: " + cmdLabel(cmd) + " [project...] -- <command...>",
+				) //nolint:err113 // usage line
 			}
 
 			command := strings.Join(args[dash:], " ")

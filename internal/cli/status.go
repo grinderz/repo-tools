@@ -31,10 +31,13 @@ func newStatusCmd(rctx *run.Ctx, name string) *cobra.Command {
 }
 
 func reportStatus(rctx *run.Ctx, p *config.Project) {
+	// The padded ==> header keeps the rows scannable as a table while the
+	// project name gets the same marker every other per-project block has.
+	header := run.Cyan("==>") + " " + padCell(p.Name, statusNameWidth, run.Bold)
 	r := repoOf(p)
 
 	if reason := missingRepo(r); reason != "" {
-		fmt.Printf("%-20s %s\n", p.Name, reason)
+		fmt.Println(header + reason)
 
 		return
 	}
@@ -42,13 +45,13 @@ func reportStatus(rctx *run.Ctx, p *config.Project) {
 	// Reporting is read-only and meant to be quick, so --fetch is opt-in here.
 	if rctx.WantFetchFor(p, false) {
 		if reason := fetchOrWarn(rctx, p, r); reason != "" {
-			fmt.Printf("%-20s %s\n", p.Name, reason)
+			fmt.Println(header + reason)
 		}
 	}
 
 	branch, err := r.CurrentBranch()
 	if err != nil {
-		fmt.Printf("%-20s %v\n", p.Name, err)
+		fmt.Printf("%s%v\n", header, err)
 
 		return
 	}
@@ -59,8 +62,8 @@ func reportStatus(rctx *run.Ctx, p *config.Project) {
 		state = "dirty"
 	}
 
-	fmt.Printf("%-20s %-22s %-6s %-10s latest:%s\n",
-		p.Name, branch, state, syncState(r, branch), latestReleaseName(r, p))
+	fmt.Printf("%s%-22s %-6s %-10s latest:%s\n",
+		header, branch, state, syncState(r, branch), latestReleaseName(r, p))
 
 	reportSubmodules(r)
 }
@@ -105,7 +108,7 @@ func reportSubmodules(r gitx.Repo) {
 			branch = "(no branch)"
 		}
 
-		fmt.Printf("  %-18s %-22s %s\n", path, branch, submodulePin(r, path))
+		fmt.Printf("    %-18s %-22s %s\n", path, branch, submodulePin(r, path))
 	}
 }
 

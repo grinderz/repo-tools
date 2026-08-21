@@ -181,6 +181,12 @@ func TestCherryPickResolvesSubmodulePinFromFreeze(t *testing.T) {
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
 
+	// The parent already pins the submodule's develop head, so develop has to
+	// move first for the dev commit to change the gitlink and the pick to
+	// conflict with the frozen pin.
+	writeFile(t, f.sub, "lib2.txt", "v3\n")
+	commit(t, f.sub, "sub: another develop feature")
+
 	git(t, f.parent, "checkout", "--quiet", "develop")
 	git(t, f.parent, "submodule", "update", "--remote", "--", "sub")
 	writeFile(t, f.parent, "app.txt", "app v2\n")
@@ -207,6 +213,54 @@ func TestCherryPickResolvesSubmodulePinFromFreeze(t *testing.T) {
 	if !strings.Contains(msg, "cherry picked from commit "+devCommit) {
 		t.Errorf("commit message lost the -x trailer:\n%s", msg)
 	}
+	if out := git(t, f.parent, "status", "--porcelain"); out != "" {
+		t.Errorf("working tree not clean after the pick:\n%s", out)
+	}
+}
+
+// The frozen pin is not the branch head forever: when the submodule's
+// release branch moves on after the freeze, a conflicted pick must land on
+// the current head, not on whatever commit the submodule worktree sits on.
+// "git submodule update --remote" skips an unmerged gitlink with exit code
+// 0, which used to leave exactly that stale pin staged.
+func TestCherryPickRepinsToAdvancedReleaseHead(t *testing.T) {
+	f := newFixture(t)
+	p := f.project(t)
+	r := gitx.Repo{Dir: f.parent}
+
+	// A real pin bump on develop: the submodule's develop moves first, so the
+	// dev commit and the frozen release pin diverge and the pick conflicts.
+	writeFile(t, f.sub, "lib2.txt", "v3\n")
+	commit(t, f.sub, "sub: another develop feature")
+
+	git(t, f.parent, "checkout", "--quiet", "develop")
+	git(t, f.parent, "submodule", "update", "--remote", "--", "sub")
+	writeFile(t, f.parent, "app.txt", "app v2\n")
+	devCommit := commit(t, f.parent, "parent: feature plus submodule bump")
+
+	git(t, f.parent, "checkout", "--quiet", "release-1.0")
+	git(t, f.parent, "submodule", "update", "--", "sub")
+
+	// The submodule's release branch moves on after the freeze.
+	git(t, f.sub, "checkout", "--quiet", "release-1.0")
+	writeFile(t, f.sub, "lib.txt", "v1-hotfix2\n")
+	newHead := commit(t, f.sub, "sub: second release hotfix")
+	git(t, f.sub, "checkout", "--quiet", "develop")
+
+	// The test context is offline, so the fetch updateSubmoduleRemote would
+	// run is done here; the point is that the stale worktree pin loses to
+	// the remote-tracking head.
+	git(t, filepath.Join(f.parent, "sub"), "fetch", "--quiet", "origin")
+
+	if err := pickOne(testCtx(), r, p, "release-1.0", devCommit); err != nil {
+		t.Fatalf("pick failed: %v", err)
+	}
+
+	if got := subPin(t, f.parent); got != newHead {
+		t.Errorf("submodule pin = %s, want the advanced release head %s (frozen pin was %s)",
+			got, newHead, f.subRelease)
+	}
+
 	if out := git(t, f.parent, "status", "--porcelain"); out != "" {
 		t.Errorf("working tree not clean after the pick:\n%s", out)
 	}

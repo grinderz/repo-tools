@@ -440,7 +440,10 @@ func TestTagWarnsAboutUnfrozenSubmodules(t *testing.T) {
 	}
 
 	// The frozen branch draws no warning.
-	if step, _ := planTag(testCtx(), p, tagRC, "release-1.0", ""); strings.Contains(step.Warn, "differ from freeze_to") {
+	if step, _ := planTag(testCtx(), p, tagRC, "release-1.0", ""); strings.Contains(
+		step.Warn,
+		"differ from freeze_to",
+	) {
 		t.Errorf("release-1.0 is frozen: %q", step.Warn)
 	}
 }

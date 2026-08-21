@@ -73,15 +73,13 @@ func watchCI(rctx *run.Ctx, r gitx.Repo, p *config.Project, sha, ref, msg string
 	}
 
 	if skipCICommit(msg) {
-		fmt.Println("\n    " + run.Dim("commit says [skip ci], not watching the pipeline"))
+		fmt.Println("    " + run.Dim("commit says [skip ci], not watching the pipeline"))
 
 		return nil
 	}
 
-	// The watch block gets a blank line of its own, the way every question
-	// does: it follows a wall of push output and runs for minutes.
-	fmt.Println()
-
+	// No blank line of its own: the answered push question already left one,
+	// and a second in a row is the only place the output would double up.
 	deadline := time.Now().Add(rctx.Cfg.CIWait())
 	appearBy := time.Now().Add(ciAppearWait)
 	last := ciPipeline{State: ciMissing}

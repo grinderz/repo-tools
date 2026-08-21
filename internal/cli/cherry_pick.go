@@ -210,7 +210,8 @@ func emptySelection(p *config.Project, branch string, filter pickFilter, already
 func printCandidates(p *config.Project, branch string, set candidateSet, filter pickFilter, numbered bool) {
 	cands := set.Picking
 
-	header := fmt.Sprintf("%s  %s <- %s: %d candidate(s)", p.Name, branch, p.DevBranch, len(cands))
+	header := fmt.Sprintf("%s %s  %s <- %s: %d candidate(s)",
+		run.Cyan("==>"), run.Bold(p.Name), run.Cyan(branch), run.Cyan(p.DevBranch), len(cands))
 	if !filter.empty() {
 		header += " selected by [" + filter.describe() + "]"
 	}
@@ -371,7 +372,11 @@ func listCandidates(rctx *run.Ctx, args []string, releaseBranch string, filter p
 		return err
 	}
 
-	for _, p := range projects {
+	for i, p := range projects {
+		if i > 0 {
+			fmt.Println()
+		}
+
 		listProjectCandidates(rctx, p, releaseBranch, filter)
 	}
 
@@ -379,30 +384,31 @@ func listCandidates(rctx *run.Ctx, args []string, releaseBranch string, filter p
 }
 
 func listProjectCandidates(rctx *run.Ctx, p *config.Project, releaseBranch string, filter pickFilter) {
+	header := run.Cyan("==>") + " " + run.Bold(p.Name)
 	r := repoOf(p)
 
 	if reason := missingRepo(r); reason != "" {
-		fmt.Printf("%s: %s\n", p.Name, reason)
+		fmt.Println(header + "  " + reason)
 
 		return
 	}
 
 	if reason := fetchOrWarn(rctx, p, r); reason != "" {
-		fmt.Printf("%s: %s\n", p.Name, reason)
+		fmt.Println(header + "  " + run.Warn() + " " + reason + ", skipped")
 
 		return
 	}
 
 	branch, _, err := latestRelease(r, p, releaseBranch)
 	if err != nil {
-		fmt.Printf("%s: %v\n", p.Name, err)
+		fmt.Printf("%s  %v\n", header, err)
 
 		return
 	}
 
 	set, err := candidatesFor(r, p, branch, filter)
 	if err != nil {
-		fmt.Printf("%s: %v\n", p.Name, err)
+		fmt.Printf("%s  %v\n", header, err)
 
 		return
 	}

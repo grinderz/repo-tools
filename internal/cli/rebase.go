@@ -354,7 +354,10 @@ func rebaseLoop(rctx *run.Ctx, r gitx.Repo, source, targetRef string) error {
 		if cont, err := r.GitEnv(noEditorEnv(), "rebase", "--continue"); err != nil {
 			// Skip only a provably empty commit; anything else is unexpected.
 			if !stagedEmpty(r) {
-				return abortRebase(r, fmt.Errorf("rebase --continue failed with a non-empty index: %s", firstLine(cont)))
+				return abortRebase(
+					r,
+					fmt.Errorf("rebase --continue failed with a non-empty index: %s", firstLine(cont)),
+				)
 			}
 
 			if _, err := r.GitEnv(noEditorEnv(), "rebase", "--skip"); err != nil {
@@ -479,7 +482,7 @@ func resolveOnePin(r gitx.Repo, source, targetRef, path string) error {
 	fmt.Printf("    submodule %s: pinned to head of %s (%s)\n",
 		path, planRef(branch), planHash(shorten(head, shortSHALen)))
 
-	_, err = r.Git("update-index", "--cacheinfo", "160000,"+head+","+path)
+	_, err = r.Git("update-index", "--cacheinfo", gitlinkMode+","+head+","+path)
 
 	return err
 }
@@ -612,7 +615,10 @@ func pushSubBranch(rctx *run.Ctx, sub gitx.Repo, path, source string) error {
 		}
 
 		if !ok {
-			return fmt.Errorf("declined pushing submodule %s; the parent would pin commits origin has never seen", path) //nolint:err113,lll // human-facing
+			return fmt.Errorf(
+				"declined pushing submodule %s; the parent would pin commits origin has never seen",
+				path,
+			) //nolint:err113,lll // human-facing
 		}
 	}
 

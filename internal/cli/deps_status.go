@@ -278,7 +278,9 @@ func moduleLine(
 	sha, err := versionCommit(providerRepo, version)
 	if err != nil {
 		return pinReport{
-			Line:    label + run.Yellow(fmt.Sprintf("go.mod has %s, which %s's clone does not know", version, provider.Name)),
+			Line: label + run.Yellow(
+				fmt.Sprintf("go.mod has %s, which %s's clone does not know", version, provider.Name),
+			),
 			Drifted: true,
 		}
 	}
