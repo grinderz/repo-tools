@@ -503,7 +503,7 @@ Commands are grouped by what they act on:
 |---|---|
 | `rt repo status` | branch, dirty state, ahead/behind, submodule pins |
 | `rt repo check` | validates the config against the working copies and the release branch |
-| `rt repo sync` | clones missing projects, fetches, fast-forwards the dev branch |
+| `rt repo sync` | clones missing projects, fetches, fast-forwards the dev branch; `--checkout` switches to it |
 | `rt repo clean` | discards uncommitted changes and restores submodule pins |
 | `rt repo report` | prints a markdown table of the projects, columns from the config |
 | `rt repo prune` | deletes local branches that are safe to lose: gone upstreams, stale release leftovers |
@@ -562,11 +562,22 @@ rt repo status api worker       # only these projects
 rt repo check                   # config vs disk, deps_cmds programs on PATH
 rt repo sync                    # clone missing, fetch, fast-forward dev
 rt repo sync --no-pull          # fetch only, leave the dev branch where it is
+rt repo sync --checkout         # and put every clean working copy on the dev branch
 rt repo clean api               # throw away uncommitted changes in one project
 rt repo clean --untracked       # and delete files git does not track
 rt repo prune                   # delete local branches that are safe to lose
 rt repo exec -- git gc          # one shell command in every project
 ```
+
+`rt repo sync` fast-forwards the dev branch without moving HEAD: when another
+branch is checked out, the ref is updated and the working copy stays where it
+is. `--checkout` switches it to the dev branch as well, with the submodules
+on the pins that branch records, so a release's worth of repositories comes
+back to `develop` in one go. The plan is the check before the switch: a
+project with uncommitted changes, untracked files included, is skipped and
+the changes are named (`working tree is dirty: app.py, notes.md; commit or
+run repo clean first`), and a branch left behind with commits origin does
+not have is pointed out too. Nothing is stashed or carried across.
 
 `rt repo prune` deletes, per project, the local branches nothing would miss:
 branches whose upstream is gone from origin but whose commits some remote

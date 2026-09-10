@@ -614,14 +614,14 @@ func TestPlanSyncHonoursTheProjectFetchSetting(t *testing.T) {
 	// No --fetch/--no-fetch here: the project setting is what is under test.
 	rctx := &run.Ctx{Cfg: &config.Config{Confirm: config.ConfirmNever}}
 
-	if plan := strings.Join(planSync(rctx, p, false).Plan, "\n"); !strings.Contains(plan, "fetch --prune") {
+	if plan := strings.Join(planSync(rctx, p, syncOptions{}).Plan, "\n"); !strings.Contains(plan, "fetch --prune") {
 		t.Errorf("by default sync fetches: %q", plan)
 	}
 
 	disabled := false
 	p.Fetch = &disabled
 
-	plan := strings.Join(planSync(rctx, p, false).Plan, "\n")
+	plan := strings.Join(planSync(rctx, p, syncOptions{}).Plan, "\n")
 	if strings.Contains(plan, "fetch --prune") || !strings.Contains(plan, "no fetch") {
 		t.Errorf("fetch: false should be visible in the plan: %q", plan)
 	}

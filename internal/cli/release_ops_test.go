@@ -118,7 +118,7 @@ func TestSyncProjectFastForwardsTheDevBranch(t *testing.T) {
 	git(t, f.parent, "reset", "--hard", "--quiet", "HEAD~1")
 
 	rctx := &run.Ctx{Cfg: &config.Config{Confirm: config.ConfirmNever}, FetchFlag: &offline}
-	if err := syncProject(rctx, p, false); err != nil {
+	if err := syncProject(rctx, p, syncOptions{}); err != nil {
 		t.Fatalf("fast-forward failed: %v", err)
 	}
 
@@ -138,7 +138,7 @@ func TestSyncProjectRefusesDirtyTree(t *testing.T) {
 
 	rctx := &run.Ctx{Cfg: &config.Config{Confirm: config.ConfirmNever}, FetchFlag: &offline}
 
-	err := syncProject(rctx, p, false)
+	err := syncProject(rctx, p, syncOptions{})
 	if err == nil || !strings.Contains(err.Error(), "dirty") {
 		t.Errorf("got %v, want a dirty-tree refusal", err)
 	}
@@ -160,7 +160,7 @@ func TestSyncProjectUpdatesDevBranchFromAnotherBranch(t *testing.T) {
 	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
 
 	rctx := &run.Ctx{Cfg: &config.Config{Confirm: config.ConfirmNever}, FetchFlag: &offline}
-	if err := syncProject(rctx, p, false); err != nil {
+	if err := syncProject(rctx, p, syncOptions{}); err != nil {
 		t.Fatalf("sync from another branch failed: %v", err)
 	}
 
@@ -170,6 +170,115 @@ func TestSyncProjectUpdatesDevBranchFromAnotherBranch(t *testing.T) {
 
 	if branch := git(t, f.parent, "rev-parse", "--abbrev-ref", "HEAD"); branch != "release-1.0" {
 		t.Errorf("the checked out branch changed to %s", branch)
+	}
+}
+
+// --checkout is the one way sync moves HEAD: the working copy lands on the
+// dev branch with the submodules on that branch's pins, not on the ones the
+// release branch left in the worktree.
+func TestSyncProjectCheckoutSwitchesToTheDevBranch(t *testing.T) {
+	f := newFixture(t)
+	p := f.project(t)
+
+	git(t, f.parent, "checkout", "--quiet", "develop")
+	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
+	publishOrigin(t, f.parent, "develop")
+
+	git(t, f.parent, "checkout", "--quiet", "release-1.0")
+	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
+
+	rctx := &run.Ctx{Cfg: &config.Config{Confirm: config.ConfirmNever}, FetchFlag: &offline}
+	if err := syncProject(rctx, p, syncOptions{Checkout: true}); err != nil {
+		t.Fatalf("sync --checkout failed: %v", err)
+	}
+
+	if branch := git(t, f.parent, "rev-parse", "--abbrev-ref", "HEAD"); branch != "develop" {
+		t.Errorf("checked out branch is %s, want develop", branch)
+	}
+
+	if got := subPin(t, f.parent); got != f.subDevelop {
+		t.Errorf("submodule sits on %s, want develop's pin %s", got, f.subDevelop)
+	}
+
+	if out := git(t, f.parent, "status", "--porcelain"); out != "" {
+		t.Errorf("working tree not clean after the switch:\n%s", out)
+	}
+}
+
+// A dev branch that only origin has is created as a tracking branch, the way
+// a fresh clone of one project among many starts out.
+func TestSyncProjectCheckoutCreatesTheDevBranchFromOrigin(t *testing.T) {
+	f := newFixture(t)
+	p := f.project(t)
+
+	git(t, f.parent, "checkout", "--quiet", "develop")
+	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
+	publishOrigin(t, f.parent, "develop")
+	want := git(t, f.parent, "rev-parse", "develop")
+
+	git(t, f.parent, "checkout", "--quiet", "release-1.0")
+	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
+	git(t, f.parent, "branch", "-D", "develop")
+
+	// --track needs a remote behind the refs publishOrigin wrote.
+	git(t, f.parent, "remote", "add", "origin", f.sub)
+
+	rctx := &run.Ctx{Cfg: &config.Config{Confirm: config.ConfirmNever}, FetchFlag: &offline}
+	if err := syncProject(rctx, p, syncOptions{Checkout: true}); err != nil {
+		t.Fatalf("sync --checkout failed: %v", err)
+	}
+
+	if head := git(t, f.parent, "rev-parse", "HEAD"); head != want {
+		t.Errorf("HEAD is %s, want origin/develop %s", head, want)
+	}
+
+	if upstream := git(t, f.parent, "rev-parse", "--abbrev-ref", "develop@{upstream}"); upstream != "origin/develop" {
+		t.Errorf("develop tracks %s, want origin/develop", upstream)
+	}
+}
+
+// The plan is where a dirty tree is caught: the project is skipped with the
+// changes named, before anything else in the batch moves.
+func TestPlanSyncCheckoutSkipsADirtyTree(t *testing.T) {
+	f := newFixture(t)
+	p := f.project(t)
+
+	writeFile(t, f.parent, "app.txt", "local edit\n")
+	writeFile(t, f.parent, "notes.txt", "untracked\n")
+
+	st := planSync(testCtx(), p, syncOptions{Checkout: true})
+	if !st.Skip {
+		t.Fatalf("a dirty tree must be skipped, got plan %q", st.Plan)
+	}
+
+	for _, want := range []string{"working tree is dirty", "app.txt", "notes.txt", "repo clean"} {
+		if !strings.Contains(st.Warn, want) {
+			t.Errorf("skip reason %q lacks %q", st.Warn, want)
+		}
+	}
+
+	if st.Exec != nil {
+		t.Error("a skipped project must not have an exec")
+	}
+}
+
+// A clean tree on another branch plans the switch and names where it starts
+// from; the dev branch itself has nothing to switch.
+func TestPlanSyncCheckoutNamesTheSwitch(t *testing.T) {
+	f := newFixture(t)
+	p := f.project(t)
+
+	plan := strings.Join(planSync(testCtx(), p, syncOptions{Checkout: true}).Plan, "\n")
+	if !strings.Contains(plan, "checkout develop (from release-1.0)") {
+		t.Errorf("the switch is not in the plan: %q", plan)
+	}
+
+	git(t, f.parent, "checkout", "--quiet", "develop")
+	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
+
+	st := planSync(testCtx(), p, syncOptions{Checkout: true})
+	if st.Skip || strings.Contains(strings.Join(st.Plan, "\n"), "checkout") {
+		t.Errorf("already on develop: skip=%v plan=%q", st.Skip, st.Plan)
 	}
 }
 

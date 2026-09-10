@@ -618,7 +618,7 @@ func pushSubBranch(rctx *run.Ctx, sub gitx.Repo, path, source string) error {
 			return fmt.Errorf(
 				"declined pushing submodule %s; the parent would pin commits origin has never seen",
 				path,
-			) //nolint:err113,lll // human-facing
+			) //nolint:err113 // human-facing
 		}
 	}
 
