@@ -30,6 +30,8 @@ func onDevelop(t *testing.T, f fixture) {
 }
 
 func TestTrackedSubmodulesReadsTheBranchFromGitmodules(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	onDevelop(t, f)
 
@@ -52,6 +54,8 @@ func TestTrackedSubmodulesReadsTheBranchFromGitmodules(t *testing.T) {
 // A submodule with no branch in .gitmodules must be reported, not moved:
 // --remote would otherwise follow whatever the remote's default branch is.
 func TestTrackedSubmodulesSeparatesBranchlessOnes(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	onDevelop(t, f)
 	git(t, f.parent, "config", "-f", ".gitmodules", "--unset", "submodule.sub.branch")
@@ -71,6 +75,8 @@ func TestTrackedSubmodulesSeparatesBranchlessOnes(t *testing.T) {
 }
 
 func TestTrackedSubmodulesFilter(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	onDevelop(t, f)
 
@@ -98,6 +104,8 @@ func TestTrackedSubmodulesFilter(t *testing.T) {
 // The pin must end up on the head of the tracked branch, including commits
 // pushed after the submodule was cloned — which is why --remote is preceded by
 // a fetch inside the submodule.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestUpdateSubmodulesMovesThePinToTheBranchHead(t *testing.T) {
 	f := newFixture(t)
 	onDevelop(t, f)
@@ -135,6 +143,8 @@ func TestUpdateSubmodulesMovesThePinToTheBranchHead(t *testing.T) {
 
 // Nothing to move is a normal outcome, and with --no-commit it must not be
 // reported as a change.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestUpdateSubmodulesIsANoopWhenAlreadyAtTheHead(t *testing.T) {
 	f := newFixture(t)
 	onDevelop(t, f)
@@ -159,6 +169,8 @@ func TestUpdateSubmodulesIsANoopWhenAlreadyAtTheHead(t *testing.T) {
 }
 
 // The commit path leaves the moved pin in a commit on the requested branch.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestUpdateSubmodulesCommitsTheNewPin(t *testing.T) {
 	f := newFixture(t)
 	onDevelop(t, f)
@@ -191,6 +203,8 @@ func TestUpdateSubmodulesCommitsTheNewPin(t *testing.T) {
 }
 
 func TestNoSubmodulesReason(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name      string
 		only      []string
@@ -212,6 +226,8 @@ func TestNoSubmodulesReason(t *testing.T) {
 
 // A project whose working copy is missing is planned as a skip, never as work.
 func TestPlanSubmodulesSkipsMissingRepo(t *testing.T) {
+	t.Parallel()
+
 	p := &config.Project{Name: "ghost", DevBranch: "develop"}
 
 	step, matched, planErr := planSubmodules(fetchingCtx(), p, submodulesOpts{})
@@ -229,6 +245,8 @@ func TestPlanSubmodulesSkipsMissingRepo(t *testing.T) {
 }
 
 func TestPlanSubmodulesUsesTheDevBranchAndReportsTargets(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	onDevelop(t, f)
 
@@ -268,6 +286,8 @@ func TestPlanSubmodulesUsesTheDevBranchAndReportsTargets(t *testing.T) {
 
 // The deps commands come from the config and run after the pins move, so a
 // lock file regenerated from a submodule lands in the same commit.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestUpdateSubmodulesRunsTheConfiguredDepsCmds(t *testing.T) {
 	f := newFixture(t)
 	onDevelop(t, f)
@@ -313,6 +333,8 @@ func TestUpdateSubmodulesRunsTheConfiguredDepsCmds(t *testing.T) {
 
 // The plan names the deps commands, so nothing runs unannounced.
 func TestPlanSubmodulesShowsTheDepsCmds(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	onDevelop(t, f)
 
@@ -337,6 +359,8 @@ func TestPlanSubmodulesShowsTheDepsCmds(t *testing.T) {
 // that happens to be checked out. Reading the working tree instead would take
 // a release branch's frozen pin and move it back onto the dev branch.
 func TestPlanSubmodulesReadsGitmodulesOfTheTargetBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	onDevelop(t, f)
 	publishOrigin(t, f.parent, "develop", "release-1.0")
@@ -360,6 +384,8 @@ func TestPlanSubmodulesReadsGitmodulesOfTheTargetBranch(t *testing.T) {
 // A submodule that exists on the checked-out branch but not on the target one
 // is not part of the run at all.
 func TestTrackedSubmodulesAtARefWithoutTheSubmodule(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	onDevelop(t, f)
 
@@ -379,6 +405,8 @@ func TestTrackedSubmodulesAtARefWithoutTheSubmodule(t *testing.T) {
 // A run that dies on the second submodule has already moved the first one; the
 // error says what is left behind, or the next run's "working tree is dirty"
 // comes out of nowhere.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestUpdateSubmodulesReportsWhatAFailureLeftBehind(t *testing.T) {
 	f := newFixture(t)
 	onDevelop(t, f)
@@ -417,6 +445,8 @@ func TestUpdateSubmodulesReportsWhatAFailureLeftBehind(t *testing.T) {
 // --allow-dirty is for finishing what a --no-commit run started: it begins on
 // a dirty tree and says what it found, but only where the diff review can
 // still be answered.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestAllowDirty(t *testing.T) {
 	f := newFixture(t)
 	onDevelop(t, f)
@@ -462,6 +492,8 @@ func TestAllowDirty(t *testing.T) {
 // absorb. A service -> its library -> the tooling submodule inside failed
 // exactly this way on a real release.
 func TestUpdateSubmoduleRemoteFollowsNestedPins(t *testing.T) {
+	t.Parallel()
+
 	root := t.TempDir()
 	inner := filepath.Join(root, "inner")
 	mid := filepath.Join(root, "mid")

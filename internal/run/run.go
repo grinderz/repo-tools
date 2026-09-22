@@ -4,7 +4,6 @@ package run
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -206,32 +205,41 @@ func (c *Ctx) Select(names []string) ([]*config.Project, error) {
 	for _, p := range c.Cfg.Projects {
 		byName[p.Name] = p
 	}
+
 	for _, n := range append(append([]string{}, names...), c.Skip...) {
 		if _, ok := byName[n]; !ok {
-			return nil, fmt.Errorf("project %q is not in the config", n)
+			return nil, fmt.Errorf("project %q %w", n, errUnknownProject)
 		}
 	}
+
 	want := map[string]bool{}
 	for _, n := range names {
 		want[n] = true
 	}
+
 	skip := map[string]bool{}
 	for _, n := range c.Skip {
 		skip[n] = true
 	}
+
 	var out []*config.Project
+
 	for _, p := range c.Cfg.Projects {
 		if len(want) > 0 && !want[p.Name] {
 			continue
 		}
+
 		if skip[p.Name] {
 			continue
 		}
+
 		out = append(out, p)
 	}
+
 	if len(out) == 0 {
-		return nil, errors.New("no projects selected")
+		return nil, errNoProjects
 	}
+
 	return out, nil
 }
 
@@ -250,25 +258,31 @@ func (c *Ctx) Gate(name string, class Class, steps []Step) (bool, error) {
 	c.Aborted = false
 
 	fmt.Printf("%s %s\n", Marker(), Bold(name+" plan"))
+
 	for _, s := range steps {
 		status := ""
 		if s.Skip {
 			status = Dim("  [skip]")
 		}
+
 		fmt.Printf("  %s%s\n", Bold(s.Project.Name), status)
+
 		for _, l := range s.Plan {
 			fmt.Printf("      %s\n", l)
 		}
+
 		if s.Warn != "" {
 			fmt.Printf("      %s %s\n", Warn(), s.Warn)
 		}
 	}
+
 	if c.DryRun {
 		fmt.Println("[dry-run] nothing executed")
 		return false, nil
 	}
+
 	if c.Yes && c.ForceConfirm {
-		return false, errors.New("--yes and --confirm are mutually exclusive")
+		return false, errYesAndConfirm
 	}
 
 	// Every project was skipped, so there is nothing to confirm: asking would
@@ -289,12 +303,15 @@ func (c *Ctx) Gate(name string, class Class, steps []Step) (bool, error) {
 	case Destructive:
 		ask = c.Cfg.Confirm != config.ConfirmNever
 	}
+
 	if c.Yes {
 		ask = false
 	}
+
 	if c.ForceConfirm {
 		ask = true
 	}
+
 	if !ask {
 		return true, nil
 	}
@@ -321,6 +338,7 @@ func runnable(steps []Step) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -328,24 +346,30 @@ func runnable(steps []Step) bool {
 // A failed step is reported and the batch continues, unless stopOnError.
 func Execute(steps []Step, stopOnError bool) error {
 	var failed []string
+
 	for _, s := range steps {
 		if s.Skip || s.Exec == nil {
 			continue
 		}
-		fmt.Printf("%s %s\n", Cyan("==>"), Bold(s.Project.Name))
+
+		fmt.Printf("%s %s\n", Arrow(), Bold(s.Project.Name))
+
 		if err := s.Exec(); err != nil {
 			// The reason is printed here, in the project's own context; what
 			// travels up is only which project stopped the run, or the caller
 			// would print the whole thing a second time on the way out.
 			fmt.Fprintf(os.Stderr, "%s %s: %v\n", Fail(), s.Project.Name, err)
+
 			failed = append(failed, s.Project.Name)
 			if stopOnError {
-				return fmt.Errorf("stopped at %s, see the error above", s.Project.Name) //nolint:err113 // human-facing
+				return fmt.Errorf("%w %s, see the error above", errStopped, s.Project.Name)
 			}
 		}
 	}
+
 	if len(failed) > 0 {
-		return fmt.Errorf("failed projects: %s", strings.Join(failed, ", "))
+		return fmt.Errorf("%w: %s", errFailedProjects, strings.Join(failed, ", "))
 	}
+
 	return nil
 }

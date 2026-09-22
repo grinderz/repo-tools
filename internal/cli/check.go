@@ -37,7 +37,7 @@ func newCheckCmd(rctx *run.Ctx, name string) *cobra.Command {
 			}
 
 			if problems > 0 {
-				return fmt.Errorf("%d project(s) with issues", problems)
+				return fmt.Errorf("%d %w", problems, errWithIssues)
 			}
 
 			return nil
@@ -111,7 +111,7 @@ func checkChangelog(rctx *run.Ctx, r gitx.Repo, p *config.Project) []string {
 func report(name string, issues []string) {
 	// The padded ==> header keeps the verdict column aligned while the project
 	// name gets the same marker every other per-project block has.
-	header := run.Cyan("==>") + " " + padCell(name, statusNameWidth, run.Bold)
+	header := run.Arrow() + " " + padCell(name, statusNameWidth, run.Bold)
 
 	if len(issues) == 0 {
 		fmt.Println(header + run.Green("ok"))

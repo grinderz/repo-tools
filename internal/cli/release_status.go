@@ -301,7 +301,7 @@ func ciSummary(pipe ciPipeline) (string, string) {
 	case ciMissing:
 		return run.Dim("none"), ""
 	case ciRunning:
-		text := "running" //nolint:goconst // the state's own word, shared only with tests
+		text := "running"
 		if pipe.Progress != "" {
 			text += " " + pipe.Progress
 		}

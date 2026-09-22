@@ -65,6 +65,8 @@ func makefileWith(modules ...string) string {
 // the freeze has to move those refs too — onto whatever branch the providing
 // project works on in this config.
 func TestRewritePinsFollowsTheProviderBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	rctx, _ := pinsCtx(t, f)
 
@@ -93,6 +95,8 @@ func TestRewritePinsFollowsTheProviderBranch(t *testing.T) {
 }
 
 func TestRewritePinsWithoutTheVariable(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	rctx, _ := pinsCtx(t, f)
 
@@ -110,6 +114,8 @@ func TestRewritePinsWithoutTheVariable(t *testing.T) {
 
 // The plan reads the branch being frozen, and freezePins writes the checkout.
 func TestPlanAndFreezePins(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	rctx, p := pinsCtx(t, f)
 
@@ -138,6 +144,8 @@ func TestPlanAndFreezePins(t *testing.T) {
 // A branch that never had the file is a state to report, not a failure: an old
 // release branch may predate the pinning convention entirely.
 func TestPlanPinsWithoutTheFile(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	rctx, p := pinsCtx(t, f)
 
@@ -153,6 +161,8 @@ func TestPlanPinsWithoutTheFile(t *testing.T) {
 
 // deps_pins is keyed by deps kind, so a project of another language has none.
 func TestPinsAreScopedToTheDepsKind(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	rctx, p := pinsCtx(t, f)
 
@@ -170,6 +180,8 @@ func TestPinsAreScopedToTheDepsKind(t *testing.T) {
 // nothing about means a missing project — and freezing the rest would ship a
 // release with that one dependency still on its dev branch.
 func TestPinsRefuseAnUnknownModule(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	rctx, p := pinsCtx(t, f)
 

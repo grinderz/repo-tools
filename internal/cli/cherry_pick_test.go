@@ -49,15 +49,18 @@ func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", args...)
 	cmd.Dir = dir
+
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
 	}
+
 	return strings.TrimSpace(string(out))
 }
 
 func writeFile(t *testing.T, dir, name, body string) {
 	t.Helper()
+
 	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -65,9 +68,11 @@ func writeFile(t *testing.T, dir, name, body string) {
 
 func initRepo(t *testing.T, dir string) {
 	t.Helper()
+
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+
 	git(t, dir, "init", "--quiet", "--initial-branch=develop")
 	git(t, dir, "config", "user.email", "rt@example.com")
 	git(t, dir, "config", "user.name", "repo-tools test")
@@ -80,6 +85,7 @@ func commitOn(t *testing.T, dir, date, msg string) string {
 	stamp := date + "T12:00:00+00:00"
 	cmd := exec.CommandContext(t.Context(), "git", "commit", "--quiet", "-a", "-m", msg)
 	cmd.Dir = dir
+
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_DATE="+stamp,
 		"GIT_COMMITTER_DATE="+stamp,
@@ -97,6 +103,7 @@ func commit(t *testing.T, dir, msg string) string {
 	t.Helper()
 	git(t, dir, "add", "-A")
 	git(t, dir, "commit", "--quiet", "-m", msg)
+
 	return git(t, dir, "rev-parse", "HEAD")
 }
 
@@ -171,12 +178,15 @@ func (f fixture) project(t *testing.T) *config.Project {
 func subPin(t *testing.T, parent string) string {
 	t.Helper()
 	out := git(t, parent, "submodule", "status", "--", "sub")
+
 	return strings.TrimLeft(strings.Fields(out)[0], "+-U")
 }
 
 // A develop commit that bumps the submodule pin must land on the release
 // branch with the pin taken from the release freeze, not from develop.
 func TestCherryPickResolvesSubmodulePinFromFreeze(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -202,17 +212,21 @@ func TestCherryPickResolvesSubmodulePinFromFreeze(t *testing.T) {
 	if got := subPin(t, f.parent); got != f.subRelease {
 		t.Errorf("submodule pin = %s, want the release head %s (develop head is %s)", got, f.subRelease, f.subDevelop)
 	}
+
 	body, err := os.ReadFile(filepath.Join(f.parent, "app.txt"))
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if string(body) != "app v2\n" {
 		t.Errorf("app.txt = %q, want the cherry-picked content", body)
 	}
+
 	msg := git(t, f.parent, "log", "-1", "--format=%B")
 	if !strings.Contains(msg, "cherry picked from commit "+devCommit) {
 		t.Errorf("commit message lost the -x trailer:\n%s", msg)
 	}
+
 	if out := git(t, f.parent, "status", "--porcelain"); out != "" {
 		t.Errorf("working tree not clean after the pick:\n%s", out)
 	}
@@ -224,6 +238,8 @@ func TestCherryPickResolvesSubmodulePinFromFreeze(t *testing.T) {
 // "git submodule update --remote" skips an unmerged gitlink with exit code
 // 0, which used to leave exactly that stale pin staged.
 func TestCherryPickRepinsToAdvancedReleaseHead(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -269,6 +285,8 @@ func TestCherryPickRepinsToAdvancedReleaseHead(t *testing.T) {
 // A develop commit that also rewrites .gitmodules must not unfreeze the
 // release branch: the release version of .gitmodules wins.
 func TestCherryPickKeepsReleaseGitmodules(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -289,9 +307,11 @@ func TestCherryPickKeepsReleaseGitmodules(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if branch != "release-1.0" {
 		t.Errorf(".gitmodules branch = %q, want release-1.0", branch)
 	}
+
 	if got := subPin(t, f.parent); got != f.subRelease {
 		t.Errorf("submodule pin = %s, want %s", got, f.subRelease)
 	}
@@ -299,6 +319,8 @@ func TestCherryPickKeepsReleaseGitmodules(t *testing.T) {
 
 // A conflict outside submodules is a human's job: the pick stays in progress.
 func TestCherryPickStopsOnRegularConflict(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -315,18 +337,23 @@ func TestCherryPickStopsOnRegularConflict(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected the pick to stop on a regular conflict")
 	}
+
 	if !strings.Contains(err.Error(), "manual conflict resolution") {
 		t.Errorf("unexpected error: %v", err)
 	}
+
 	if _, statErr := os.Stat(filepath.Join(f.parent, ".git", "CHERRY_PICK_HEAD")); statErr != nil {
 		t.Error("the cherry-pick should have been left in progress for manual resolution")
 	}
+
 	git(t, f.parent, "cherry-pick", "--abort")
 }
 
 // Picking a commit whose change is already on the release branch is a
 // warning, not a failure.
 func TestCherryPickSkipsEmptyPick(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -343,6 +370,7 @@ func TestCherryPickSkipsEmptyPick(t *testing.T) {
 	if err := pickOne(testCtx(), r, p, "release-1.0", devCommit); err != nil {
 		t.Fatalf("an already-applied commit should be skipped, got: %v", err)
 	}
+
 	if after := git(t, f.parent, "rev-parse", "HEAD"); after != before {
 		t.Error("an empty pick should not create a commit")
 	}
@@ -350,6 +378,8 @@ func TestCherryPickSkipsEmptyPick(t *testing.T) {
 
 // alreadyPicked and candidates rely on the -x trailer written above.
 func TestAlreadyPickedReadsTrailers(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -359,6 +389,7 @@ func TestAlreadyPickedReadsTrailers(t *testing.T) {
 	devCommit := commit(t, f.parent, "parent: feature")
 
 	git(t, f.parent, "checkout", "--quiet", "release-1.0")
+
 	if err := pickOne(testCtx(), r, p, "release-1.0", devCommit); err != nil {
 		t.Fatal(err)
 	}
@@ -366,10 +397,12 @@ func TestAlreadyPickedReadsTrailers(t *testing.T) {
 	// alreadyPicked reads the origin refs of both branches, so give the repo them.
 	git(t, f.parent, "update-ref", "refs/remotes/origin/release-1.0", "HEAD")
 	git(t, f.parent, "update-ref", "refs/remotes/origin/develop", "develop")
+
 	picked, err := alreadyPicked(r, p, "release-1.0")
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if !picked[devCommit] {
 		t.Errorf("commit %s not recognised as already picked, got %v", devCommit, picked)
 	}
@@ -378,6 +411,8 @@ func TestAlreadyPickedReadsTrailers(t *testing.T) {
 // A branch created in the submodule's origin after the parent cloned it is
 // only reachable once the submodule itself is fetched.
 func TestUpdateSubmoduleRemoteFetchesNewBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 
@@ -400,6 +435,8 @@ func TestUpdateSubmoduleRemoteFetchesNewBranch(t *testing.T) {
 
 // A branch that exists nowhere is reported plainly, not as a raw git failure.
 func TestUpdateSubmoduleRemoteReportsMissingBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 
@@ -419,6 +456,8 @@ func TestUpdateSubmoduleRemoteReportsMissingBranch(t *testing.T) {
 // Explicit hashes are checked against the release branch before anything runs:
 // an already-picked commit is dropped with a warning, not handed to git.
 func TestResolveShasSkipsAlreadyPicked(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -430,6 +469,7 @@ func TestResolveShasSkipsAlreadyPicked(t *testing.T) {
 	second := commit(t, f.parent, "parent: second")
 
 	git(t, f.parent, "checkout", "--quiet", "release-1.0")
+
 	if err := pickOne(testCtx(), r, p, "release-1.0", first); err != nil {
 		t.Fatal(err)
 	}
@@ -449,6 +489,8 @@ func TestResolveShasSkipsAlreadyPicked(t *testing.T) {
 }
 
 func TestResolveShasFailsWhenEverythingIsAlreadyThere(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -458,6 +500,7 @@ func TestResolveShasFailsWhenEverythingIsAlreadyThere(t *testing.T) {
 	only := commit(t, f.parent, "parent: only")
 
 	git(t, f.parent, "checkout", "--quiet", "release-1.0")
+
 	if err := pickOne(testCtx(), r, p, "release-1.0", only); err != nil {
 		t.Fatal(err)
 	}
@@ -478,6 +521,8 @@ func TestResolveShasFailsWhenEverythingIsAlreadyThere(t *testing.T) {
 // A commit that is not in the release branch must survive the check: git cherry
 // looks at whole histories unless it is limited to the single commit.
 func TestResolveShasKeepsUnpickedCommit(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -503,6 +548,8 @@ func TestResolveShasKeepsUnpickedCommit(t *testing.T) {
 // --since is handed to git log, so only commits from that date onwards are
 // offered as candidates.
 func TestCandidatesForDateWindow(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -554,6 +601,8 @@ func TestCandidatesForDateWindow(t *testing.T) {
 // A pick can fail without any conflict — a dirty index, for one. The tool must
 // pass git's own words through instead of announcing a conflict.
 func TestPickOneReportsNonConflictFailure(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -585,6 +634,8 @@ func TestPickOneReportsNonConflictFailure(t *testing.T) {
 // Unpushed local commits must stop a batch command: committing on top of them
 // would push someone's unrelated work along with the change.
 func TestCheckoutTrackingRefusesUnpushedWork(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 

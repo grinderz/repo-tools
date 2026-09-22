@@ -62,7 +62,7 @@ func newSubmodulesCmd(rctx *run.Ctx, name string) *cobra.Command {
 			}
 
 			if len(opts.Only) > 0 && matched == 0 {
-				return fmt.Errorf("no selected project has any of the submodules %v", opts.Only)
+				return fmt.Errorf("%w %v", errNoSuchSubs, opts.Only)
 			}
 
 			class := run.Destructive

@@ -81,7 +81,7 @@ func newCherryPickCmd(rctx *run.Ctx, name string) *cobra.Command {
 
 func runCherryPick(rctx *run.Ctx, name string, args []string, releaseBranch string, filter pickFilter) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: %s <project> [sha...] (or --list)", name)
+		return fmt.Errorf("%w: %s <project> [sha...] (or --list)", errUsage, name)
 	}
 
 	projects, err := rctx.Select(args[:1])
@@ -93,7 +93,7 @@ func runCherryPick(rctx *run.Ctx, name string, args []string, releaseBranch stri
 	r := repoOf(p)
 
 	if reason := missingRepo(r); reason != "" {
-		return fmt.Errorf("%s: %s", p.Name, reason) //nolint:err113 // human-facing, not matched by callers
+		return fmt.Errorf("%s: %w", p.Name, reasonError(reason))
 	}
 
 	if err := fetch(rctx, p, r); err != nil {
@@ -166,9 +166,8 @@ func selectCandidates(
 
 	if !rctx.Interactive() {
 		return nil, fmt.Errorf(
-			"%s: no commits given, and choosing them needs a question this run cannot ask "+
-				"(--yes or confirm: never): pass the hashes, use --task/--grep, or use --confirm",
-			p.Name,
+			"%s: %w (--yes or confirm: never): pass the hashes, use --task/--grep, or use --confirm",
+			p.Name, errNoCommitsGiven,
 		)
 	}
 
@@ -196,12 +195,12 @@ func selectCandidates(
 func emptySelection(p *config.Project, branch string, filter pickFilter, alreadyInSync int) error {
 	switch {
 	case filter.empty():
-		return fmt.Errorf("%s: %s already has everything from %s", p.Name, branch, p.DevBranch)
+		return fmt.Errorf("%s: %s %w %s", p.Name, branch, errUpToDate, p.DevBranch)
 	case alreadyInSync > 0:
-		return fmt.Errorf("%s: all %d commit(s) selected by [%s] are already in %s",
-			p.Name, alreadyInSync, filter.describe(), branch)
+		return fmt.Errorf("%s: all %d commit(s) selected by [%s] %w %s",
+			p.Name, alreadyInSync, filter.describe(), errAlreadyPicked, branch)
 	default:
-		return fmt.Errorf("%s: nothing in %s is selected by [%s]", p.Name, p.DevBranch, filter.describe())
+		return fmt.Errorf("%s: nothing in %s %w [%s]", p.Name, p.DevBranch, errNotSelected, filter.describe())
 	}
 }
 
@@ -211,7 +210,7 @@ func printCandidates(p *config.Project, branch string, set candidateSet, filter 
 	cands := set.Picking
 
 	header := fmt.Sprintf("%s %s  %s <- %s: %d candidate(s)",
-		run.Cyan("==>"), run.Bold(p.Name), run.Cyan(branch), run.Cyan(p.DevBranch), len(cands))
+		run.Arrow(), run.Bold(p.Name), run.Cyan(branch), run.Cyan(p.DevBranch), len(cands))
 	if !filter.empty() {
 		header += " selected by [" + filter.describe() + "]"
 	}
@@ -249,7 +248,7 @@ func resolveShas(r gitx.Repo, p *config.Project, branch string, shas []string) (
 	for _, s := range shas {
 		full, err := r.Git("rev-parse", "--verify", s+"^{commit}")
 		if err != nil {
-			return nil, fmt.Errorf("%s: unknown commit %q", p.Name, s)
+			return nil, fmt.Errorf("%s: %w %q", p.Name, errUnknownCommit, s)
 		}
 
 		if reason := alreadyInBranch(r, branch, full, picked); reason != "" {
@@ -263,7 +262,7 @@ func resolveShas(r gitx.Repo, p *config.Project, branch string, shas []string) (
 	}
 
 	if len(out) == 0 {
-		return nil, fmt.Errorf("%s: every commit given is already in %s", p.Name, branch)
+		return nil, fmt.Errorf("%s: %w %s", p.Name, errAllGivenPicked, branch)
 	}
 
 	return out, nil
@@ -384,7 +383,7 @@ func listCandidates(rctx *run.Ctx, args []string, releaseBranch string, filter p
 }
 
 func listProjectCandidates(rctx *run.Ctx, p *config.Project, releaseBranch string, filter pickFilter) {
-	header := run.Cyan("==>") + " " + run.Bold(p.Name)
+	header := run.Arrow() + " " + run.Bold(p.Name)
 	r := repoOf(p)
 
 	if reason := missingRepo(r); reason != "" {
@@ -603,8 +602,8 @@ func repinSubmodule(rctx *run.Ctx, r gitx.Repo, p *config.Project, path string) 
 	}
 
 	if branch == "" {
-		return fmt.Errorf("submodule %s has no branch in .gitmodules of %s: "+
-			"run deps freeze first, otherwise --remote would follow the default branch", path, p.Name)
+		return fmt.Errorf("submodule %s %w %s: "+
+			"run deps freeze first, otherwise --remote would follow the default branch", path, errNoSubBranch, p.Name)
 	}
 
 	if err := updateSubmoduleRemote(rctx, p, r, path, branch); err != nil {
@@ -633,5 +632,5 @@ func manualStop(r gitx.Repo, p *config.Project, short string, paths []string) er
 	fmt.Println(run.Dim("  git cherry-pick --continue   # or --abort"))
 	fmt.Println()
 
-	return fmt.Errorf("manual conflict resolution required in %s", p.Name)
+	return fmt.Errorf("%w %s", errManualResolve, p.Name)
 }

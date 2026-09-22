@@ -52,7 +52,7 @@ func newDepsStatusCmd(rctx *run.Ctx, name string) *cobra.Command {
 }
 
 func depsStatusProject(rctx *run.Ctx, p *config.Project, fetched map[string]bool) {
-	header := run.Cyan("==>") + " " + run.Bold(p.Name)
+	header := run.Arrow() + " " + run.Bold(p.Name)
 	r := repoOf(p)
 
 	if reason := missingRepo(r); reason != "" {

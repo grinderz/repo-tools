@@ -20,9 +20,14 @@ go install github.com/grinderz/repo-tools/cmd/rt@latest
 
 `rt help --all` prints the help of every command at once — eighteen screens
 otherwise, and the only practical way to grep for a flag. `make help` lists
-every target. The other useful ones are `make test`,
-`make test.coverage`, `make lint` (go vet plus golangci-lint), `make lint.fix`
-and `make format`.
+every target. The other useful ones are `make test` (gotestsum, race
+detector), `make test.repeat` (twice in one process, shuffled),
+`make test.coverage` (`scripts/check-coverage.sh` fails the run below
+`GO_TEST_COVERAGE_THRESHOLD`),
+`make test.docker` / `make test.docker.coverage` (the same in the golang
+image), `make lint` (go vet, golangci-lint, shellcheck and the pre-commit
+hooks),
+`make lint.fix` and `make go.format`.
 
 ## Configuration
 
@@ -411,11 +416,11 @@ raw hashes git prints by default — that is what makes a frozen pin or an
 auto-resolved conflict reviewable at all. Diffs are coloured by git itself.
 
 The output speaks one visual language, the one a package manager taught
-everyone's eyes: `::` (bold cyan) opens a phase — a plan header, a flow step,
-a question; `==>` names the project being worked on; `WARNING:` is yellow and
-`ERROR:` red, always with the colon; hints and side notes (like the `config:`
-line) are dim. One meaning per shape, the same shape in every command. While
-a pipeline is watched, the running line carries its progress —
+everyone's eyes: `::` (bold cyan) opens a phase — a plan header, a flow step, a
+question; `==>` (bold green) names the project being worked on; `WARNING:` is
+yellow and `ERROR:` red, always with the colon; hints and side notes (like the
+`config:` line) are dim. One meaning per shape, the same shape in every
+command. While a pipeline is watched, the running line carries its progress —
 `gitlab pipeline #123 running (3/7 jobs): <url>` — a new line whenever the
 count moves, so the wait has a shape even in a scrollback.
 
@@ -456,10 +461,10 @@ findable without scrolling back.
 
 Colour is used for three things, and each keeps its colour everywhere: a ref —
 branch, tag, revision — is cyan, a commit or tag message green, a commit hash
-yellow the way git prints one. `==>` and project names are bold, warnings
-yellow, errors red, hints dimmed, and diffs are coloured by git itself. A tag
-message also gets its subject in bold; all of it is display only, the text
-pushed with the tag is the plain one.
+yellow the way git prints one. `==>` is bold green and project names bold,
+warnings yellow, errors red, hints dimmed, and diffs are coloured by git
+itself. A tag message also gets its subject in bold; all of it is display only,
+the text pushed with the tag is the plain one.
 
 It is on by default; `diff: false` turns it off, and `--diff` / `--no-diff`
 override the config for one run. Declining keeps the work locally (staged
@@ -1029,7 +1034,12 @@ make lint
 ```
 
 The cherry-pick tests build throwaway repositories with a real submodule and
-exercise the conflict resolution end to end. Linting runs golangci-lint 2.12.2
-with `.golangci.yml`: every linter is on except a documented handful, and the
-gci/gofmt/gofumpt/goimports formatters are enforced (`make format` applies
-them, `make lint.fmt` only reports).
+exercise the conflict resolution end to end. They run in parallel under the
+race detector; the few that swap `os.Stdout` or the colour switch stay serial
+and say so. `make lint` is `go vet`, golangci-lint 2.13.2 with
+`.golangci.yml` — every linter is on except a documented handful, and the
+gci/gofmt/gofumpt/goimports formatters are enforced (`make go.format` applies
+them, `make lint.fmt` only reports) — and the pre-commit hooks of
+`.pre-commit-config.yaml`, gitleaks among them (`make lint.pre-commit`, needs
+`uvx`). Errors wrap a sentinel at the fixed part of their sentence, so the
+text stays readable and `errors.Is` still works.

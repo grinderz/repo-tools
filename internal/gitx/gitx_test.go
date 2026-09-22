@@ -3,6 +3,8 @@ package gitx
 import "testing"
 
 func TestParseReleaseBranch(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name, prefix string
 		want         string
@@ -21,6 +23,7 @@ func TestParseReleaseBranch(t *testing.T) {
 			t.Errorf("%s: ok = %v, want %v", c.name, ok, c.ok)
 			continue
 		}
+
 		if ok && v.String() != c.want {
 			t.Errorf("%s: got %s, want %s", c.name, v, c.want)
 		}
@@ -28,17 +31,23 @@ func TestParseReleaseBranch(t *testing.T) {
 }
 
 func TestLatestReleaseBranch(t *testing.T) {
+	t.Parallel()
+
 	branches := []string{"develop", "release-1.9", "release-1.26", "release-2.0", "release-1.25", "master"}
+
 	name, v, ok := LatestReleaseBranch(branches, "release-")
 	if !ok || name != "release-2.0" || v.Major != 2 || v.Minor != 0 {
 		t.Fatalf("got %q %v %v", name, v, ok)
 	}
+
 	if _, _, ok := LatestReleaseBranch([]string{"develop"}, "release-"); ok {
 		t.Fatal("expected no release branch")
 	}
 }
 
 func TestParseTag(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		in   string
 		want string
@@ -58,6 +67,7 @@ func TestParseTag(t *testing.T) {
 			t.Errorf("%s: ok = %v, want %v", c.in, ok, c.ok)
 			continue
 		}
+
 		if ok && v.String() != c.want {
 			t.Errorf("%s: got %s, want %s", c.in, v, c.want)
 		}
@@ -65,7 +75,10 @@ func TestParseTag(t *testing.T) {
 }
 
 func TestNextRc(t *testing.T) {
+	t.Parallel()
+
 	rel := ReleaseVer{1, 26}
+
 	cases := []struct {
 		name string
 		tags []string
@@ -86,7 +99,10 @@ func TestNextRc(t *testing.T) {
 }
 
 func TestNextFinal(t *testing.T) {
+	t.Parallel()
+
 	rel := ReleaseVer{1, 26}
+
 	cases := []struct {
 		name string
 		tags []string
@@ -107,6 +123,8 @@ func TestNextFinal(t *testing.T) {
 // from, and the branch carries nothing the dev branch does not — so the message
 // counts from the previous release line, which is what the release contains.
 func TestPreviousTag(t *testing.T) {
+	t.Parallel()
+
 	tags := []string{"0.1.0", "0.1.1-rc.0", "0.1.1", "0.2.0-rc.0", "1.0.0", "not-a-tag"}
 
 	got, ok := PreviousTag(tags, ReleaseVer{Major: 0, Minor: 2})

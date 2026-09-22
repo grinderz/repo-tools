@@ -9,10 +9,12 @@ import (
 
 func write(t *testing.T, body string) string {
 	t.Helper()
+
 	path := filepath.Join(t.TempDir(), "cfg.yaml")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	return path
 }
 
@@ -24,39 +26,51 @@ projects:
 `
 
 func TestLoadDefaults(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, minimal))
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if cfg.Confirm != ConfirmAlways {
 		t.Errorf("confirm = %q, want %q", cfg.Confirm, ConfirmAlways)
 	}
+
 	p := cfg.Projects[0]
 	if p.DevBranch != "develop" {
 		t.Errorf("dev_branch = %q, want develop", p.DevBranch)
 	}
+
 	if p.ReleaseBranchPrefix != "release-" {
 		t.Errorf("release_branch_prefix = %q, want release-", p.ReleaseBranchPrefix)
 	}
+
 	if p.Deps != DepsNone {
 		t.Errorf("deps = %q, want none", p.Deps)
 	}
+
 	if want := filepath.Join("/srv/projects", "api"); p.Dir() != want {
 		t.Errorf("dir = %q, want %q", p.Dir(), want)
 	}
+
 	if cfg.RcTagMessage == "" || cfg.ReleaseTagMessage == "" {
 		t.Error("tag message defaults are empty")
 	}
 }
 
 func TestChangelogBranchFallsBackToDev(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, minimal))
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if got := cfg.Projects[0].ChangelogBranchOrDev(); got != "develop" {
 		t.Errorf("got %q, want develop", got)
 	}
+
 	cfg.Projects[0].ChangelogBranch = "main"
 	if got := cfg.Projects[0].ChangelogBranchOrDev(); got != "main" {
 		t.Errorf("got %q, want main", got)
@@ -64,6 +78,8 @@ func TestChangelogBranchFallsBackToDev(t *testing.T) {
 }
 
 func TestProjectDirWinsOverGlobal(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, `
 projects_dir: /srv/projects
 projects:
@@ -74,6 +90,7 @@ projects:
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if got := cfg.Projects[0].Dir(); got != "/elsewhere/api" {
 		t.Errorf("dir = %q, want /elsewhere/api", got)
 	}
@@ -107,6 +124,8 @@ projects:
 `
 
 func TestDefaultsApplyToProjectsThatOmitFields(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, withDefaults))
 	if err != nil {
 		t.Fatal(err)
@@ -116,18 +135,23 @@ func TestDefaultsApplyToProjectsThatOmitFields(t *testing.T) {
 	if p.DevBranch != "main" {
 		t.Errorf("dev_branch = %q, want main", p.DevBranch)
 	}
+
 	if p.ReleaseBranchPrefix != "rel/" {
 		t.Errorf("release_branch_prefix = %q, want rel/", p.ReleaseBranchPrefix)
 	}
+
 	if p.Deps != "uv" {
 		t.Errorf("deps = %q, want uv", p.Deps)
 	}
+
 	if !p.ChangelogEnabled() || !p.DepsFreezeEnabled() {
 		t.Error("changelog and deps_freeze should be inherited as enabled")
 	}
 }
 
 func TestProjectFieldsWinOverDefaults(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, withDefaults))
 	if err != nil {
 		t.Fatal(err)
@@ -137,9 +161,11 @@ func TestProjectFieldsWinOverDefaults(t *testing.T) {
 	if p.DevBranch != "develop" {
 		t.Errorf("dev_branch = %q, want develop", p.DevBranch)
 	}
+
 	if p.ReleaseBranchPrefix != "release-" {
 		t.Errorf("release_branch_prefix = %q, want release-", p.ReleaseBranchPrefix)
 	}
+
 	if p.Deps != "go" {
 		t.Errorf("deps = %q, want go", p.Deps)
 	}
@@ -150,6 +176,8 @@ func TestProjectFieldsWinOverDefaults(t *testing.T) {
 }
 
 func TestBuiltinDefaultsWhenNoDefaultsBlock(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, minimal))
 	if err != nil {
 		t.Fatal(err)
@@ -159,6 +187,7 @@ func TestBuiltinDefaultsWhenNoDefaultsBlock(t *testing.T) {
 	if p.DevBranch != "develop" || p.ReleaseBranchPrefix != "release-" || p.Deps != DepsNone {
 		t.Errorf("built-in defaults not applied: %+v", p)
 	}
+
 	if p.ChangelogEnabled() || p.DepsFreezeEnabled() {
 		t.Error("changelog and deps_freeze should stay off unless enabled")
 	}
@@ -186,6 +215,8 @@ projects:
 `
 
 func TestChangelogCommandsAndEnvInheritance(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, withChangelog))
 	if err != nil {
 		t.Fatal(err)
@@ -219,6 +250,8 @@ func TestChangelogCommandsAndEnvInheritance(t *testing.T) {
 }
 
 func TestInitSubmodulesForChangelogDefaultsToTrue(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, withChangelog))
 	if err != nil {
 		t.Fatal(err)
@@ -237,6 +270,8 @@ func TestInitSubmodulesForChangelogDefaultsToTrue(t *testing.T) {
 }
 
 func TestSkipCiIsInTheDefaultChangelogMessage(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, minimal))
 	if err != nil {
 		t.Fatal(err)
@@ -248,6 +283,8 @@ func TestSkipCiIsInTheDefaultChangelogMessage(t *testing.T) {
 }
 
 func TestLoadRejects(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name, body, wantErr string
 	}{
@@ -338,6 +375,7 @@ projects:
 			t.Errorf("%s: expected an error", c.name)
 			continue
 		}
+
 		if !strings.Contains(err.Error(), c.wantErr) {
 			t.Errorf("%s: error %q does not mention %q", c.name, err, c.wantErr)
 		}
@@ -347,6 +385,8 @@ projects:
 // The dependency commands live in the config: a kind resolves to its list, a
 // project may replace it, and deps: none runs nothing.
 func TestDepsCommands(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, `
 projects_dir: /p
 deps_cmds:
@@ -378,6 +418,8 @@ projects:
 
 // A deps kind with no commands anywhere is a typo, not a silent no-op.
 func TestUnknownDepsKindIsRejected(t *testing.T) {
+	t.Parallel()
+
 	_, err := Load(write(t, `
 projects_dir: /p
 deps_cmds:
@@ -403,6 +445,8 @@ projects:
 // release_branch may name a branch that does not exist yet, but it has to be
 // shaped like one, or the rc and tag arithmetic has nothing to read.
 func TestReleaseBranchIsValidated(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, `
 projects_dir: /p
 projects:
@@ -429,6 +473,8 @@ projects:
 // release_tags is the one toggle that defaults to on: most projects are
 // tagged, and a library consumed by branch opts out.
 func TestReleaseTagsDefaultsToOn(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, `
 projects_dir: /p
 defaults:
@@ -467,6 +513,8 @@ projects:
 // product_version is optional, but a template that asks for one must have it:
 // the alternative is a pushed tag reading "release 1.0.0 of {product_version}".
 func TestProductVersionMustBeSetWhenUsed(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, `
 projects_dir: /p
 product_version: "2026.06"
@@ -507,6 +555,8 @@ projects:
 // Asking about everything is the default: a run that changes nothing is cheap
 // to confirm, an unwanted push is not.
 func TestConfirmDefaultsToAlways(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(write(t, `
 projects_dir: /p
 projects:
@@ -538,6 +588,8 @@ projects:
 // A message template holds a colon, so an unquoted one is a YAML mapping and
 // the parser's complaint says nothing useful on its own.
 func TestUnquotedMessageGetsAQuotingHint(t *testing.T) {
+	t.Parallel()
+
 	_, err := Load(write(t, `
 projects_dir: /p
 submodules_commit_message: chore(deps): update submodules on {branch}
@@ -572,6 +624,8 @@ projects:
 // to its project by remote — paths differ between projects, section names are
 // local to each .gitmodules.
 func TestSameRemote(t *testing.T) {
+	t.Parallel()
+
 	same := [][2]string{
 		{"git@git.example.com:group/lib.git", "git@git.example.com:group/lib.git"},
 		{"git@git.example.com:group/lib.git", "https://git.example.com/group/lib.git"},
@@ -601,6 +655,8 @@ func TestSameRemote(t *testing.T) {
 // to keep loading — a field renamed in code but not there would otherwise be
 // found by whoever copies it next.
 func TestExampleConfigLoads(t *testing.T) {
+	t.Parallel()
+
 	cfg, err := Load(filepath.Join("..", "..", "config.example.yaml"))
 	if err != nil {
 		t.Fatal(err)
@@ -614,6 +670,8 @@ func TestExampleConfigLoads(t *testing.T) {
 // A failed pipeline gets one automatic second chance unless the config says
 // otherwise; ci_retries: 0 makes a failure final at once.
 func TestCIRetryLimit(t *testing.T) {
+	t.Parallel()
+
 	cfg := &Config{}
 	if cfg.CIRetryLimit() != 1 {
 		t.Errorf("default = %d, want 1", cfg.CIRetryLimit())
@@ -644,6 +702,7 @@ func TestCIRetryLimit(t *testing.T) {
 // The pager follows the config, then $PAGER, then a sensible default.
 func TestPagerCommand(t *testing.T) {
 	cfg := &Config{}
+
 	t.Setenv("PAGER", "")
 
 	if got := cfg.PagerCommand(); got != "less -R" {

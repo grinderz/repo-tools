@@ -43,6 +43,8 @@ func compareFixture(t *testing.T) (fixture, gitx.Repo, map[string]string) {
 }
 
 func TestCompareBranchesClassifiesBothSides(t *testing.T) {
+	t.Parallel()
+
 	f, r, shas := compareFixture(t)
 	p := f.project(t)
 
@@ -80,6 +82,8 @@ func TestCompareBranchesClassifiesBothSides(t *testing.T) {
 
 // The filter narrows every group, so one ticket's fate is one screen.
 func TestCompareBranchesAppliesTheFilter(t *testing.T) {
+	t.Parallel()
+
 	f, r, shas := compareFixture(t)
 	p := f.project(t)
 
@@ -100,6 +104,8 @@ func TestCompareBranchesAppliesTheFilter(t *testing.T) {
 // A release branch the config names before anyone created it is a state to
 // report, not a git failure.
 func TestCompareBranchesReportsAPendingReleaseBranch(t *testing.T) {
+	t.Parallel()
+
 	f, r, _ := compareFixture(t)
 	p := f.project(t)
 

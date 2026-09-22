@@ -43,6 +43,8 @@ func runFlow(path string, args ...string) error {
 
 // A flow is the config's release routine: the sequence is printed first, then
 // every command runs exactly as it would on its own.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestFlowRunsItsCommandsInOrder(t *testing.T) {
 	path := flowConfig(t, "flows:\n  rel:\n    - \"repo sync\"\n    - \"repo status\"\n")
 
@@ -64,6 +66,8 @@ func TestFlowRunsItsCommandsInOrder(t *testing.T) {
 // Every step is resolved before any runs: a broken flow must fail while
 // nothing has happened yet, not in the middle of a release.
 func TestFlowRefusesWhatItCannotRun(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name string
 		flow string
@@ -76,6 +80,8 @@ func TestFlowRefusesWhatItCannotRun(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			path := flowConfig(t, "flows:\n  rel:\n    - \"repo sync\"\n"+tc.flow)
 
 			err := runFlow(path, "flow", "rel", "--dry-run")
@@ -89,6 +95,8 @@ func TestFlowRefusesWhatItCannotRun(t *testing.T) {
 // A broken flow is a config error for every command, not a surprise on
 // release day when the flow first runs.
 func TestFlowsAreValidatedAtStartup(t *testing.T) {
+	t.Parallel()
+
 	path := flowConfig(t, "flows:\n  rel:\n    - \"repo bogus\"\n")
 
 	err := runFlow(path, "repo", "status", "--no-fetch")
@@ -100,6 +108,8 @@ func TestFlowsAreValidatedAtStartup(t *testing.T) {
 // The commands a flow cannot express or should never batch are refused at
 // startup with the reason, like every other flow config error.
 func TestFlowRefusesBannedSteps(t *testing.T) {
+	t.Parallel()
+
 	for _, step := range []string{"git cherry-pick", "git rebase", "repo exec", "changelog gen"} {
 		path := flowConfig(t, "flows:\n  rel:\n    - \""+step+"\"\n")
 
@@ -113,6 +123,8 @@ func TestFlowRefusesBannedSteps(t *testing.T) {
 // The disable list holds inside a flow too, or it would be a fence with a
 // gate: a dev config that forbids deps freeze forbids it spelled either way.
 func TestFlowHonorsDisabledCommands(t *testing.T) {
+	t.Parallel()
+
 	path := flowConfig(t, "disable:\n  - \"deps freeze\"\nflows:\n  rel:\n    - \"deps freeze\"\n")
 
 	err := runFlow(path, "flow", "rel", "--dry-run")
@@ -124,6 +136,8 @@ func TestFlowHonorsDisabledCommands(t *testing.T) {
 // A flow name is answered with the list to pick from, and a config without
 // flows says that instead of hinting at a list that is empty.
 func TestFlowNameMustExist(t *testing.T) {
+	t.Parallel()
+
 	path := flowConfig(t, "flows:\n  rel:\n    - \"repo sync\"\n")
 
 	err := runFlow(path, "flow", "rell", "--dry-run")

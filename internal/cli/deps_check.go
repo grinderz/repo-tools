@@ -40,7 +40,7 @@ func newDepsCheckCmd(rctx *run.Ctx, name string) *cobra.Command {
 			}
 
 			if stale > 0 {
-				return fmt.Errorf("%d project(s) with stale dependency files", stale)
+				return fmt.Errorf("%d %w", stale, errStaleDeps)
 			}
 
 			return nil
@@ -51,7 +51,7 @@ func newDepsCheckCmd(rctx *run.Ctx, name string) *cobra.Command {
 // depsCheckProject runs one project's checks; ok says they all passed, ran
 // says there was anything to run at all.
 func depsCheckProject(rctx *run.Ctx, p *config.Project) (bool, bool) {
-	header := run.Cyan("==>") + " " + run.Bold(p.Name)
+	header := run.Arrow() + " " + run.Bold(p.Name)
 
 	cmds := rctx.Cfg.DepsCheckCommands(p)
 	if len(cmds) == 0 {

@@ -162,6 +162,7 @@ func planTag(
 	}
 
 	msg := expand(msgTpl, vars)
+
 	plan := fmt.Sprintf("tag %s on %s (%s) and push",
 		planRef(tag), planRef("origin/"+branch), planMsg(summarize(msg)))
 	if rctx.ShowDiff() {
@@ -420,7 +421,7 @@ func tagExists(r gitx.Repo, tag string) bool {
 func createTag(rctx *run.Ctx, p *config.Project, branch, tag, msg, warn string) error {
 	r := repoOf(p)
 	if !r.RemoteBranchExists(branch) {
-		return fmt.Errorf("origin/%s does not exist", branch)
+		return fmt.Errorf("origin/%s %w", branch, errNoRemoteBranch)
 	}
 
 	ok, err := reviewTag(rctx, r, p.Name, tag, branch, msg, warn)

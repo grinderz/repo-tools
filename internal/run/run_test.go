@@ -13,6 +13,7 @@ func testCtx(names ...string) *Ctx {
 	for _, n := range names {
 		cfg.Projects = append(cfg.Projects, &config.Project{Name: n})
 	}
+
 	return &Ctx{Cfg: cfg}
 }
 
@@ -21,48 +22,64 @@ func namesOf(ps []*config.Project) string {
 	for _, p := range ps {
 		out = append(out, p.Name)
 	}
+
 	return strings.Join(out, ",")
 }
 
 func TestSelectDefaultsToAllInConfigOrder(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("pylib", "golib", "api", "worker")
+
 	got, err := c.Select(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if want := "pylib,golib,api,worker"; namesOf(got) != want {
 		t.Fatalf("got %s, want %s", namesOf(got), want)
 	}
 }
 
 func TestSelectKeepsConfigOrderNotArgumentOrder(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("pylib", "golib", "api", "worker")
+
 	got, err := c.Select([]string{"worker", "pylib"})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if want := "pylib,worker"; namesOf(got) != want {
 		t.Fatalf("got %s, want %s", namesOf(got), want)
 	}
 }
 
 func TestSelectSkip(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a", "b", "c")
 	c.Skip = []string{"b"}
+
 	got, err := c.Select(nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if want := "a,c"; namesOf(got) != want {
 		t.Fatalf("got %s, want %s", namesOf(got), want)
 	}
 }
 
 func TestSelectUnknownNameFails(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a", "b")
 	if _, err := c.Select([]string{"nope"}); err == nil {
 		t.Fatal("expected an error for an unknown project")
 	}
+
 	c.Skip = []string{"nope"}
 	if _, err := c.Select(nil); err == nil {
 		t.Fatal("expected an error for an unknown skipped project")
@@ -70,7 +87,10 @@ func TestSelectUnknownNameFails(t *testing.T) {
 }
 
 func TestSelectEmptyResultFails(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a")
+
 	c.Skip = []string{"a"}
 	if _, err := c.Select(nil); err == nil {
 		t.Fatal("expected an error when nothing is selected")
@@ -83,8 +103,11 @@ func runnableStep(c *Ctx) Step {
 }
 
 func TestGateDryRunNeverExecutes(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a")
 	c.DryRun = true
+
 	ok, err := c.Gate("release rc", Destructive, []Step{runnableStep(c)})
 	if err != nil || ok {
 		t.Fatalf("dry-run should not proceed: ok=%v err=%v", ok, err)
@@ -92,6 +115,8 @@ func TestGateDryRunNeverExecutes(t *testing.T) {
 }
 
 func TestGateConfirmModes(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name        string
 		confirm     string
@@ -109,11 +134,13 @@ func TestGateConfirmModes(t *testing.T) {
 		c := testCtx("a")
 		c.Cfg.Confirm = tc.confirm
 		c.Yes = tc.yes
+
 		ok, err := c.Gate("cmd", tc.class, []Step{runnableStep(c)})
 		if err != nil {
 			t.Errorf("%s: %v", tc.name, err)
 			continue
 		}
+
 		if ok != tc.wantProceed {
 			t.Errorf("%s: proceed = %v, want %v", tc.name, ok, tc.wantProceed)
 		}
@@ -121,6 +148,8 @@ func TestGateConfirmModes(t *testing.T) {
 }
 
 func TestShowDiffDefaultsOnAndFlagWins(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a")
 	if !c.ShowDiff() {
 		t.Error("the diff review should be on by default")
@@ -149,6 +178,8 @@ func TestShowDiffDefaultsOnAndFlagWins(t *testing.T) {
 }
 
 func TestInteractive(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name    string
 		confirm string
@@ -173,7 +204,10 @@ func TestInteractive(t *testing.T) {
 }
 
 func TestGateRejectsYesWithConfirm(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a")
+
 	c.Yes, c.ForceConfirm = true, true
 	if _, err := c.Gate("cmd", Destructive, nil); err == nil {
 		t.Fatal("expected --yes with --confirm to be rejected")
@@ -181,8 +215,11 @@ func TestGateRejectsYesWithConfirm(t *testing.T) {
 }
 
 func TestExecuteSkipsPlannedNoops(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a", "b")
 	ran := 0
+
 	steps := []Step{
 		{Project: c.Cfg.Projects[0], Skip: true, Exec: func() error { ran++; return nil }},
 		{Project: c.Cfg.Projects[1], Exec: func() error { ran++; return nil }},
@@ -190,6 +227,7 @@ func TestExecuteSkipsPlannedNoops(t *testing.T) {
 	if err := Execute(steps, false); err != nil {
 		t.Fatal(err)
 	}
+
 	if ran != 1 {
 		t.Fatalf("ran %d steps, want 1", ran)
 	}
@@ -198,6 +236,8 @@ func TestExecuteSkipsPlannedNoops(t *testing.T) {
 // Read-only commands do not fetch and mutating ones do; either default gives
 // way to the flags.
 func TestWantFetch(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a")
 
 	if !c.WantFetch(true) || c.WantFetch(false) {
@@ -221,6 +261,8 @@ func TestWantFetch(t *testing.T) {
 
 // Colour is opt-out and process-wide; with it off nothing is wrapped, which is
 // what keeps piped output clean.
+//
+//nolint:paralleltest // flips the process-wide colour switch
 func TestColorHelpers(t *testing.T) {
 	SetColor(false)
 	defer SetColor(false)
@@ -243,6 +285,8 @@ func TestColorHelpers(t *testing.T) {
 
 // The flag wins over the config, the config over the terminal.
 func TestUseColorPrecedence(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a")
 	enabled, disabled := true, false
 
@@ -264,6 +308,8 @@ func TestUseColorPrecedence(t *testing.T) {
 
 // A failing project stops the batch unless --keep-going says otherwise.
 func TestExecuteStopsAtTheFirstFailure(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a", "b")
 	ran := 0
 	steps := []Step{
@@ -288,6 +334,8 @@ func TestExecuteStopsAtTheFirstFailure(t *testing.T) {
 // A project may opt out of being fetched — another remote, another hardware
 // key — and only an explicit --fetch overrides that.
 func TestWantFetchForProject(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a")
 	project := c.Cfg.Projects[0]
 
@@ -320,6 +368,8 @@ func TestWantFetchForProject(t *testing.T) {
 // Only y/yes, n/no and plain Enter are answers; anything else sends the
 // question back — a stray keystroke must not decide a release step.
 func TestParseAnswer(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		in         string
 		byDefault  bool
@@ -347,6 +397,8 @@ func TestParseAnswer(t *testing.T) {
 // invite a yes to a run that does nothing. It is not a failure either — the
 // plan already says why each project was left alone.
 func TestGateWithNothingToDo(t *testing.T) {
+	t.Parallel()
+
 	c := testCtx("a")
 
 	ok, err := c.Gate("changelog update", LocalMutate,

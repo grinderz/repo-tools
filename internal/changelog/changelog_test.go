@@ -21,6 +21,7 @@ func commitAt(t *testing.T, dir, date, subject, author string) {
 	stamp := date + "T12:00:00+00:00"
 	cmd := exec.CommandContext(t.Context(), "git", "commit", "--quiet", "-a", "-m", subject)
 	cmd.Dir = dir
+
 	cmd.Env = append(os.Environ(),
 		"GIT_AUTHOR_NAME="+author,
 		"GIT_AUTHOR_EMAIL=a@example.com",
@@ -116,6 +117,8 @@ func TestGitLogWindow(t *testing.T) {
 }
 
 func TestGitLogDefaultHeader(t *testing.T) {
+	t.Parallel()
+
 	got, err := GitLog(fixtureRepo(t), Options{})
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +130,8 @@ func TestGitLogDefaultHeader(t *testing.T) {
 }
 
 func TestGitLogEmptyRepo(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	cmd := exec.CommandContext(t.Context(), "git", "init", "--quiet")
 	cmd.Dir = dir

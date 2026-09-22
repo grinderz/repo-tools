@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
@@ -115,7 +114,7 @@ func candidatesFor(r gitx.Repo, p *config.Project, branch string, filter pickFil
 	// A config may name a release branch before anyone creates it; that is a
 	// state to report, not a raw "unknown commit" from git.
 	if !r.RemoteBranchExists(branch) {
-		return candidateSet{}, errors.New(pendingReleaseWarn(branch)) //nolint:err113 // shared with the other commands
+		return candidateSet{}, pendingRelease(branch)
 	}
 
 	missing, err := candidates(r, p, branch)

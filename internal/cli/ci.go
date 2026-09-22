@@ -128,8 +128,8 @@ func watchCI(rctx *run.Ctx, r gitx.Repo, p *config.Project, sha, ref, msg string
 
 			return nil
 		case pipe.State != ciMissing && now.After(deadline):
-			return fmt.Errorf("%s %s is still running after %s: %s",
-				p.CI, pipe.Label, rctx.Cfg.CIWait(), pipe.URL)
+			return fmt.Errorf("%s %s %w %s: %s",
+				p.CI, pipe.Label, errStillRunning, rctx.Cfg.CIWait(), pipe.URL)
 		}
 
 		time.Sleep(rctx.Cfg.CIPoll())
@@ -158,7 +158,7 @@ func ciReport(kind string, pipe ciPipeline, last *ciPipeline) (bool, error) {
 
 		return true, nil
 	case ciFailed:
-		return true, fmt.Errorf("%s %s failed: %s", kind, pipe.Label, pipe.URL)
+		return true, fmt.Errorf("%s %s %w: %s", kind, pipe.Label, errPipelineFailed, pipe.URL)
 	case ciSkipped:
 		fmt.Printf("    %s %s was skipped\n", kind, pipe.Label)
 
@@ -206,7 +206,7 @@ func ciQuery(r gitx.Repo, kind, sha, ref string) (ciPipeline, error) {
 		return parseGitHubRuns(out)
 	}
 
-	return ciPipeline{}, fmt.Errorf("unknown ci kind %q", kind)
+	return ciPipeline{}, fmt.Errorf("%w %q", errUnknownCI, kind)
 }
 
 // ciRetry restarts the failed jobs of what just failed, the same thing the
@@ -223,7 +223,7 @@ func ciRetry(r gitx.Repo, kind string, pipe ciPipeline) error {
 		return err
 	}
 
-	return fmt.Errorf("unknown ci kind %q", kind)
+	return fmt.Errorf("%w %q", errUnknownCI, kind)
 }
 
 // parseGitLabPipelines reads what GET /pipelines?sha=&ref= returned. The
@@ -275,7 +275,7 @@ func parseGitLabJobs(out string) (string, error) {
 
 	for _, job := range jobs {
 		switch job.Status {
-		case "success", "failed", "canceled", "skipped": //nolint:goconst // GitLab's own words
+		case "success", "failed", "canceled", "skipped":
 			done++
 		}
 	}

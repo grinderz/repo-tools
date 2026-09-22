@@ -32,6 +32,8 @@ func bumpPin(t *testing.T, f fixture, sha string) {
 // the submodule feature branch's fresh (rebased) head — the pin recorded
 // before that rebase no longer exists anywhere on it.
 func TestRebaseResolvesSubmodulePin(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -87,6 +89,8 @@ func TestRebaseResolvesSubmodulePin(t *testing.T) {
 // branch — allowed only once that branch has absorbed the feature's pin,
 // here through a merge.
 func TestRebaseFallsBackToTheTrackedBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -126,6 +130,8 @@ func TestRebaseFallsBackToTheTrackedBranch(t *testing.T) {
 // A conflict outside a submodule is a human's job: the rebase is aborted and
 // the branch stays where it was.
 func TestRebaseAbortsOnRegularConflict(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -158,6 +164,8 @@ func TestRebaseAbortsOnRegularConflict(t *testing.T) {
 // A pin the tracked branch has not absorbed stops the run: resolving over it
 // would drop the commit from the superproject.
 func TestRebaseRefusesUnmergedPin(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -200,6 +208,8 @@ func TestRebaseRefusesUnmergedPin(t *testing.T) {
 // feature branch is rebased onto its develop and pushed, and the parent's
 // conflicting pin lands on that fresh head. Nothing was rebased by hand.
 func TestRebaseSubmodulesRebasesAndPushesTheSubBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -248,6 +258,8 @@ func TestRebaseSubmodulesRebasesAndPushesTheSubBranch(t *testing.T) {
 // pushed submodule head is pinned by an extra commit — otherwise the branch
 // would keep pointing at commits the force-push just orphaned.
 func TestRebaseSubmodulesRepinsWithoutAConflict(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -292,6 +304,8 @@ func TestRebaseSubmodulesRepinsWithoutAConflict(t *testing.T) {
 // A submodule branch named like the one being rebased wins over the tracked
 // branch: that is cross-repo feature work.
 func TestRebasePinBranchPrefersTheSourceBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	sub := gitx.Repo{Dir: filepath.Join(f.parent, "sub")}
 

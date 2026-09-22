@@ -22,6 +22,8 @@ func publishOrigin(t *testing.T, dir string, branches ...string) {
 }
 
 func TestLatestReleasePicksTheHighest(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -44,6 +46,8 @@ func TestLatestReleasePicksTheHighest(t *testing.T) {
 }
 
 func TestLatestReleaseOverrideIsValidated(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -59,6 +63,8 @@ func TestLatestReleaseOverrideIsValidated(t *testing.T) {
 }
 
 func TestLatestReleaseWithoutAnyReleaseBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -72,6 +78,8 @@ func TestLatestReleaseWithoutAnyReleaseBranch(t *testing.T) {
 }
 
 func TestRequireClean(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 
@@ -88,6 +96,8 @@ func TestRequireClean(t *testing.T) {
 
 // The review prints what is staged and, with nobody to ask, lets the commit
 // through rather than blocking a non-interactive run.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestReviewStagedPrintsAndPassesWhenNotInteractive(t *testing.T) {
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -123,6 +133,7 @@ func TestReviewStagedPrintsAndPassesWhenNotInteractive(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestReviewStagedSilentWhenDisabled(t *testing.T) {
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -143,6 +154,8 @@ func TestReviewStagedSilentWhenDisabled(t *testing.T) {
 }
 
 // Nothing to push means nothing to review.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestReviewUnpushedWithNothingAhead(t *testing.T) {
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -159,6 +172,7 @@ func TestReviewUnpushedWithNothingAhead(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestReviewUnpushedShowsTheCommits(t *testing.T) {
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -183,6 +197,8 @@ func TestReviewUnpushedShowsTheCommits(t *testing.T) {
 }
 
 func TestCheckRemoteAndWorktree(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -219,6 +235,8 @@ func TestCheckRemoteAndWorktree(t *testing.T) {
 }
 
 func TestCheckSubmodulesAgainstConfig(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -251,6 +269,8 @@ func TestCheckSubmodulesAgainstConfig(t *testing.T) {
 // A deps command whose program is missing cannot run, and that is worth
 // saying before a batch gets halfway through.
 func TestCheckDeps(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	p.Deps = "go"
@@ -283,6 +303,8 @@ func TestCheckDeps(t *testing.T) {
 // freeze_to names a branch directly, or asks for the submodule's own highest
 // release branch.
 func TestResolveFreezeBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -308,6 +330,8 @@ func TestResolveFreezeBranch(t *testing.T) {
 // The commands come from the config, a project may replace them outright, and
 // deps: none runs nothing whatever the map says.
 func TestDepsCmds(t *testing.T) {
+	t.Parallel()
+
 	rctx := testCtx()
 	rctx.Cfg.DepsCmds = map[string][]string{
 		"uv": {"uv sync"},
@@ -334,6 +358,8 @@ func TestDepsCmds(t *testing.T) {
 }
 
 // deps freeze runs the same configured commands, and --no-deps skips them.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestFreezeDepsRunsTheConfiguredDepsCmds(t *testing.T) {
 	f := newFixture(t)
 	p := f.project(t)
@@ -367,6 +393,8 @@ func TestFreezeDepsRunsTheConfiguredDepsCmds(t *testing.T) {
 }
 
 func TestPlanFreezeDepsHonoursNoDeps(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	p.Deps = "uv"
@@ -393,6 +421,8 @@ func TestPlanFreezeDepsHonoursNoDeps(t *testing.T) {
 // out, so the plan says so instead of describing a freeze built from whatever
 // the working tree happens to have.
 func TestPlanFreezeDepsRefusesAPendingReleaseBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	depsFreeze := true
@@ -416,6 +446,8 @@ func TestPlanFreezeDepsRefusesAPendingReleaseBranch(t *testing.T) {
 // branch cut before the submodule was added has none to freeze, however many
 // the current checkout carries.
 func TestPlanFreezeDepsWarnsAboutTheReleaseBranchSubmodules(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	depsFreeze := true
@@ -438,6 +470,8 @@ func TestPlanFreezeDepsWarnsAboutTheReleaseBranchSubmodules(t *testing.T) {
 // .gitmodules. Judging by the checked-out branch would resolve freeze_to
 // against the wrong submodule set — or against no submodule at all.
 func TestPlanSubmoduleFreezeReadsTheReleaseBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	p.Submodules = []config.Submodule{{Path: "sub", FreezeTo: freezeToRelease}}
@@ -465,6 +499,8 @@ func TestPlanSubmoduleFreezeReadsTheReleaseBranch(t *testing.T) {
 
 // A configured submodule the release branch does not have is skipped with a
 // warning, the way the plan said — the other submodules still get frozen.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestFreezeDepsSkipsSubmodulesMissingOnTheBranch(t *testing.T) {
 	f := newFixture(t)
 	p := f.project(t)
@@ -493,6 +529,8 @@ func TestFreezeDepsSkipsSubmodulesMissingOnTheBranch(t *testing.T) {
 // A config that names its release branch describes one release: every command
 // takes that branch, and it need not exist yet.
 func TestReleaseBranchFromConfig(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	p.ReleaseBranch = "release-9.9"
@@ -535,6 +573,8 @@ func TestReleaseBranchFromConfig(t *testing.T) {
 // library others freeze to is exactly the project that would look fine while
 // blocking everyone else.
 func TestCheckReleaseBranchPending(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -563,6 +603,8 @@ func TestCheckReleaseBranchPending(t *testing.T) {
 // settings against, so checkSubmodules stays silent rather than judging the dev
 // branch or repeating what checkReleaseBranch already said.
 func TestCheckSubmodulesWithAPendingReleaseBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	p.ReleaseBranch = "release-9.9"
@@ -577,6 +619,8 @@ func TestCheckSubmodulesWithAPendingReleaseBranch(t *testing.T) {
 // changelog_branch: release means "this project's release branch", so a
 // per-release config names the branch once instead of in two fields.
 func TestChangelogBranchRelease(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -608,6 +652,8 @@ func TestChangelogBranchRelease(t *testing.T) {
 
 // A project kept off the network must not be planned as if it were fetched.
 func TestPlanSyncHonoursTheProjectFetchSetting(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -631,6 +677,8 @@ func TestPlanSyncHonoursTheProjectFetchSetting(t *testing.T) {
 // previous run that stopped half way, and its leftovers are invisible
 // otherwise.
 func TestRequireCleanNamesTheChanges(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 
@@ -657,6 +705,8 @@ func TestRequireCleanNamesTheChanges(t *testing.T) {
 // A submodule that is itself a configured project needs no freeze_to of its
 // own: the branch is written once, in that project's definition.
 func TestFreezeListDerivedFromProjects(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	p.Submodules = nil

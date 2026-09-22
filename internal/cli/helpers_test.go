@@ -57,6 +57,8 @@ func captureOutput(t *testing.T, fn func()) string {
 }
 
 func TestExpand(t *testing.T) {
+	t.Parallel()
+
 	vars := map[string]string{varVersion: "1.2.3", varBranch: "release-1.2", varProject: "api"}
 
 	got := expand("tag {version} on {branch} of {project}", vars)
@@ -71,6 +73,8 @@ func TestExpand(t *testing.T) {
 }
 
 func TestFirstLineAndShorten(t *testing.T) {
+	t.Parallel()
+
 	if got := firstLine("one\ntwo\nthree"); got != "one" {
 		t.Errorf("firstLine = %q", got)
 	}
@@ -89,6 +93,8 @@ func TestFirstLineAndShorten(t *testing.T) {
 }
 
 func TestMissingRepo(t *testing.T) {
+	t.Parallel()
+
 	if reason := missingRepo(gitx.Repo{Dir: t.TempDir() + "/nope"}); !strings.Contains(reason, "not cloned") {
 		t.Errorf("got %q", reason)
 	}
@@ -106,6 +112,8 @@ func TestMissingRepo(t *testing.T) {
 // The wrapped git error leads with "exit status 128", which explains
 // nothing; the fatal: line buried in the output is the actual reason.
 func TestGitReason(t *testing.T) {
+	t.Parallel()
+
 	err := errors.New("git fetch --prune --tags origin: exit status 128\n" +
 		"fatal: unable to access 'https://x/': Could not resolve host: x")
 	if got := gitReason(err); got != "fatal: unable to access 'https://x/': Could not resolve host: x" {
@@ -128,8 +136,11 @@ func TestGitReason(t *testing.T) {
 }
 
 func TestPlanLinesMentionTheReview(t *testing.T) {
+	t.Parallel()
+
 	p := &config.Project{Name: "api", CI: config.CINone}
 	shown := &run.Ctx{Cfg: &config.Config{}}
+
 	lines := commitPlanLines(shown, p, "release-1.0", "files changed", "ci/AB-0000: update changelog")
 	if !strings.Contains(lines[0], "diff shown first") {
 		t.Errorf("got %q", lines[0])
@@ -158,6 +169,8 @@ func TestPlanLinesMentionTheReview(t *testing.T) {
 // A project with ci set tells the operator in the plan that the push is not
 // the end of the step, and --no-ci silences exactly that.
 func TestPlanLinesMentionTheCIWatch(t *testing.T) {
+	t.Parallel()
+
 	p := &config.Project{Name: "api", CI: config.CIGitLab}
 	rctx := &run.Ctx{Cfg: &config.Config{}}
 
@@ -175,6 +188,8 @@ func TestPlanLinesMentionTheCIWatch(t *testing.T) {
 // The pager is for bodies worth scrolling. A one-line tag message is not one:
 // paging it would put a screen in front of a single sentence.
 func TestPageTextSkipsASingleLine(t *testing.T) {
+	t.Parallel()
+
 	rctx := &run.Ctx{Cfg: &config.Config{}}
 
 	for _, text := range []string{"", "2026.06 RC", "2026.06 RC\n"} {
@@ -186,6 +201,8 @@ func TestPageTextSkipsASingleLine(t *testing.T) {
 
 // The tag message is painted for reading only: the text pushed with the tag is
 // the plain one, so no escape sequence may reach the value itself.
+//
+//nolint:paralleltest // flips the process-wide colour switch
 func TestHighlightMessage(t *testing.T) {
 	run.SetColor(true)
 	defer run.SetColor(false)
@@ -213,6 +230,7 @@ func TestHighlightMessage(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestPrintCapped(t *testing.T) {
 	rctx := &run.Ctx{Cfg: &config.Config{}}
 
@@ -252,6 +270,8 @@ func TestPrintCapped(t *testing.T) {
 }
 
 func TestSortedKeysAndEnvPairs(t *testing.T) {
+	t.Parallel()
+
 	env := map[string]string{"B": "2", "A": "1", "C": "3"}
 
 	keys := sortedKeys(env)
@@ -268,6 +288,8 @@ func TestSortedKeysAndEnvPairs(t *testing.T) {
 // The changelog commands and their environment take the same placeholders,
 // and {rt} must point at this binary so the built-in generator is reachable.
 func TestChangelogCommandsAndEnvExpansion(t *testing.T) {
+	t.Parallel()
+
 	cfg := &config.Config{
 		ChangelogCmds: []string{"{rt} changelog gen --header '# CHANGELOG of {project}' > out.md"},
 		ChangelogEnv:  map[string]string{"GIT_CLIFF__CHANGELOG__HEADER": "# Changelog of {project} on {branch}"},
@@ -301,6 +323,8 @@ func TestChangelogCommandsAndEnvExpansion(t *testing.T) {
 }
 
 func TestEmptySelectionExplainsWhy(t *testing.T) {
+	t.Parallel()
+
 	project := &config.Project{Name: "api", DevBranch: "develop"}
 
 	none := mustFilter(t, nil, nil)
@@ -327,6 +351,8 @@ func TestEmptySelectionExplainsWhy(t *testing.T) {
 // A negative flag must disable, not enable: returning a pointer to the flag
 // variable itself would hand back true for --no-diff and --no-fetch.
 func TestOverride(t *testing.T) {
+	t.Parallel()
+
 	if got := override(false, false); got != nil {
 		t.Errorf("no flag means no override, got %v", *got)
 	}
@@ -343,6 +369,8 @@ func TestOverride(t *testing.T) {
 }
 
 func TestRejectBothFlags(t *testing.T) {
+	t.Parallel()
+
 	if err := rejectBothFlags(true, true, "--diff", "--no-diff"); err == nil {
 		t.Error("both switches at once is a contradiction")
 	}
@@ -357,6 +385,8 @@ func TestRejectBothFlags(t *testing.T) {
 // Every template sees the product version, and the tag messages additionally
 // see the computed tag.
 func TestMessageVarsCarryTheProductVersion(t *testing.T) {
+	t.Parallel()
+
 	rctx := &run.Ctx{Cfg: &config.Config{ProductVersion: "2026.06"}}
 	project := &config.Project{Name: "api"}
 
@@ -376,6 +406,8 @@ func TestMessageVarsCarryTheProductVersion(t *testing.T) {
 // A dev config has no business freezing dependencies for a release, so it can
 // say so once instead of relying on everyone remembering which config is loaded.
 func TestDisabledCommands(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	body := "disable:\n" +
@@ -423,6 +455,8 @@ func TestDisabledCommands(t *testing.T) {
 // help --all is what makes twelve commands and their flags reviewable at once,
 // so it has to cover every leaf and print the flags, not just the names.
 func TestHelpAllCoversTheTree(t *testing.T) {
+	t.Parallel()
+
 	root := NewRoot()
 
 	var out strings.Builder
@@ -453,6 +487,7 @@ func TestHelpAllCoversTheTree(t *testing.T) {
 	// A single command still works the ordinary way. A fresh root, because a
 	// real run is a fresh process and cobra keeps parsed flags on the command.
 	single := NewRoot()
+
 	out.Reset()
 	single.SetOut(&out)
 	single.SetArgs([]string{"help", "repo", "clean"})
@@ -469,6 +504,8 @@ func TestHelpAllCoversTheTree(t *testing.T) {
 // The review body goes through a pager on a terminal; in a pipe — which is
 // where tests and CI live — it is printed and the cap applies.
 func TestPagerIsSkippedWithoutATerminal(t *testing.T) {
+	t.Parallel()
+
 	rctx := &run.Ctx{Cfg: &config.Config{}}
 
 	if pageText(rctx, "some text") {

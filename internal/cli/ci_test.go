@@ -7,6 +7,8 @@ import (
 // The GitLab answer is a list with the newest pipeline first; every status
 // falls into one of the states the watch acts on.
 func TestParseGitLabPipelines(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		name, status string
 		want         ciState
@@ -22,6 +24,8 @@ func TestParseGitLabPipelines(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			out := `[{"id": 42, "status": "` + tc.status + `", "web_url": "https://gl/p/42"}]`
 
 			pipe, err := parseGitLabPipelines(out)
@@ -39,6 +43,8 @@ func TestParseGitLabPipelines(t *testing.T) {
 // A retry addresses what failed: the GitLab pipeline itself, or exactly the
 // GitHub run that went red among green ones.
 func TestParsersNameWhatARetryAddresses(t *testing.T) {
+	t.Parallel()
+
 	gl, err := parseGitLabPipelines(`[{"id": 42, "status": "failed", "web_url": "u"}]`)
 	if err != nil || gl.RetryID != "42" {
 		t.Errorf("gitlab retry id = %q, %v", gl.RetryID, err)
@@ -56,6 +62,8 @@ func TestParsersNameWhatARetryAddresses(t *testing.T) {
 // The wait has a shape: jobs that will not move again count as done, a
 // manual gate does not — the pipeline itself turns manual and says so.
 func TestParseGitLabJobs(t *testing.T) {
+	t.Parallel()
+
 	out := `[{"status": "success"}, {"status": "failed"}, {"status": "skipped"},` +
 		`{"status": "running"}, {"status": "created"}, {"status": "manual"}]`
 
@@ -75,6 +83,8 @@ func TestParseGitLabJobs(t *testing.T) {
 
 // A commit still building reports how many of its runs have finished.
 func TestParseGitHubRunsProgress(t *testing.T) {
+	t.Parallel()
+
 	out := `[{"databaseId": 1, "status": "completed", "conclusion": "success", "url": "u", "workflowName": "a"},` +
 		`{"databaseId": 2, "status": "in_progress", "conclusion": "", "url": "u", "workflowName": "b"},` +
 		`{"databaseId": 3, "status": "queued", "conclusion": "", "url": "u", "workflowName": "c"}]`
@@ -86,6 +96,8 @@ func TestParseGitHubRunsProgress(t *testing.T) {
 }
 
 func TestParseGitLabPipelinesEdges(t *testing.T) {
+	t.Parallel()
+
 	if pipe, err := parseGitLabPipelines("[]"); err != nil || pipe.State != ciMissing {
 		t.Errorf("no pipeline yet: %+v, %v", pipe, err)
 	}
@@ -105,6 +117,8 @@ func TestParseGitLabPipelinesEdges(t *testing.T) {
 // GitHub has no single pipeline: a commit is green when every workflow run of
 // it is, red as soon as one failed, and still running while any run is.
 func TestParseGitHubRuns(t *testing.T) {
+	t.Parallel()
+
 	completed := func(conclusion string) string {
 		return `{"status": "completed", "conclusion": "` + conclusion +
 			`", "url": "https://gh/r", "workflowName": "ci"}`
@@ -125,6 +139,8 @@ func TestParseGitHubRuns(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
 			pipe, err := parseGitHubRuns(tc.out)
 			if err != nil {
 				t.Fatal(err)
@@ -140,6 +156,8 @@ func TestParseGitHubRuns(t *testing.T) {
 // The changelog commit carries [skip ci] on purpose; waiting two minutes for
 // its pipeline would punish exactly the configuration the tool itself writes.
 func TestSkipCICommit(t *testing.T) {
+	t.Parallel()
+
 	if !skipCICommit("chore(changelog): update changelog [skip ci]") {
 		t.Error("[skip ci] must be recognized")
 	}

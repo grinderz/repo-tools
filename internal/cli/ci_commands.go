@@ -125,7 +125,7 @@ func newCIWatchCmd(rctx *run.Ctx, name string) *cobra.Command {
 			}
 
 			if failed > 0 {
-				return fmt.Errorf("%d project(s) failed", failed)
+				return fmt.Errorf("%d %w", failed, errProjectsFailed)
 			}
 
 			return nil
@@ -140,11 +140,11 @@ func ciWatchProject(rctx *run.Ctx, p *config.Project, override string) error {
 	r := repoOf(p)
 
 	if reason := missingRepo(r); reason != "" {
-		return fmt.Errorf("%s: %s", p.Name, reason) //nolint:err113 // human-facing
+		return fmt.Errorf("%s: %w", p.Name, reasonError(reason))
 	}
 
 	if p.CI == config.CINone {
-		fmt.Printf("%s %s  %s\n", run.Cyan("==>"), run.Bold(p.Name), run.Dim("ci is not configured, skipped"))
+		fmt.Printf("%s %s  %s\n", run.Arrow(), run.Bold(p.Name), run.Dim("ci is not configured, skipped"))
 
 		return nil
 	}
@@ -162,7 +162,7 @@ func ciWatchProject(rctx *run.Ctx, p *config.Project, override string) error {
 
 	fmt.Printf(
 		"%s %s  %s @ %s\n",
-		run.Cyan("==>"),
+		run.Arrow(),
 		run.Bold(p.Name),
 		run.Cyan(ref),
 		planHash(shorten(sha, shortSHALen)),
@@ -195,5 +195,5 @@ func ciTarget(r gitx.Repo, p *config.Project, override string) (string, string, 
 		return sha, ref, err
 	}
 
-	return "", "", fmt.Errorf("%q is neither a branch on origin nor a tag", ref)
+	return "", "", fmt.Errorf("%q %w", ref, errUnknownRef)
 }

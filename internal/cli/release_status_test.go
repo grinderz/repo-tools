@@ -11,6 +11,8 @@ import (
 // The line's rc and final columns are independent: a final does not hide the
 // rc that tested it, and tags of other lines stay out.
 func TestReleaseLineTags(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 
@@ -31,6 +33,8 @@ func TestReleaseLineTags(t *testing.T) {
 
 // head says "tagged" only while the branch head is what the last tag marks.
 func TestHeadStatus(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 
@@ -61,6 +65,8 @@ func TestHeadStatus(t *testing.T) {
 // The compare column carries git compare's counters and turns yellow only
 // while dev commits are still waiting to be picked.
 func TestCompareCell(t *testing.T) {
+	t.Parallel()
+
 	f, r, _ := compareFixture(t)
 	p := f.project(t)
 
@@ -77,6 +83,8 @@ func TestCompareCell(t *testing.T) {
 // The pins column folds every pin's drift into one cell and repeats the
 // drifted lines under the row.
 func TestPinsCell(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -104,6 +112,8 @@ func TestPinsCell(t *testing.T) {
 
 // Freeze has nothing to say for a project that does not freeze.
 func TestFreezeStatusDisabled(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -116,6 +126,8 @@ func TestFreezeStatusDisabled(t *testing.T) {
 
 // --ref accepts a branch on origin or a tag; anything else is named plainly.
 func TestCITarget(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -140,6 +152,8 @@ func TestCITarget(t *testing.T) {
 
 // One pipeline, one coloured word — the details stay off the table row.
 func TestCISummary(t *testing.T) {
+	t.Parallel()
+
 	word, detail := ciSummary(ciPipeline{State: ciRunning, Progress: "3/7 jobs", URL: "http://x"})
 	if !strings.Contains(word, "running 3/7 jobs") || detail != "http://x" {
 		t.Errorf("running: word=%q detail=%q", word, detail)
@@ -158,6 +172,8 @@ func TestCISummary(t *testing.T) {
 // {task} is the ticket id the branch name carries; a branch without one
 // renders the placeholder empty rather than inventing something.
 func TestTaskFromBranch(t *testing.T) {
+	t.Parallel()
+
 	cases := map[string]string{
 		"feat/AB-000":          "AB-000",
 		"build/AB-00000":       "AB-00000",

@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -83,7 +82,7 @@ func newCompareCmd(rctx *run.Ctx, name string) *cobra.Command {
 }
 
 func compareProject(rctx *run.Ctx, p *config.Project, releaseBranch string, filter pickFilter) {
-	header := run.Cyan("==>") + " " + run.Bold(p.Name)
+	header := run.Arrow() + " " + run.Bold(p.Name)
 	r := repoOf(p)
 
 	if reason := missingRepo(r); reason != "" {
@@ -177,7 +176,7 @@ type comparison struct {
 // appears once. Everything else is genuinely one-sided.
 func compareBranches(r gitx.Repo, p *config.Project, branch string, filter pickFilter) (comparison, error) {
 	if !r.RemoteBranchExists(branch) {
-		return comparison{}, errors.New(pendingReleaseWarn(branch)) //nolint:err113 // human-facing
+		return comparison{}, pendingRelease(branch)
 	}
 
 	dev, rel := "origin/"+p.DevBranch, "origin/"+branch

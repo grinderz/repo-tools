@@ -11,6 +11,8 @@ import (
 
 // A clean tree is planned as a skip, a dirty one names what would go.
 func TestPlanCleanCountsTheChanges(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -35,6 +37,8 @@ func TestPlanCleanCountsTheChanges(t *testing.T) {
 // Untracked files are left alone unless asked for, since deleting them is the
 // one thing here git itself cannot undo.
 func TestPlanCleanLeavesUntrackedFilesAlone(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	writeFile(t, f.parent, "scratch.txt", "not tracked\n")
@@ -51,6 +55,8 @@ func TestPlanCleanLeavesUntrackedFilesAlone(t *testing.T) {
 
 // The whole point: a tree the other commands refuse to touch becomes usable
 // again, submodule pins included.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestCleanProjectRestoresTheTree(t *testing.T) {
 	f := newFixture(t)
 	p := f.project(t)
@@ -107,6 +113,8 @@ func TestCleanProjectRestoresTheTree(t *testing.T) {
 // A project that keeps its GOPROXY or index URLs in .envrc must have them when
 // its own commands run, or the build reaches for the public proxy instead.
 func TestDirenvStateAndShell(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 	rctx := testCtx()

@@ -39,6 +39,8 @@ func repoWithCommit(t *testing.T) Repo {
 }
 
 func TestHasCommits(t *testing.T) {
+	t.Parallel()
+
 	empty := t.TempDir()
 	run(t, empty, "init", "--quiet")
 
@@ -52,6 +54,8 @@ func TestHasCommits(t *testing.T) {
 }
 
 func TestExistsAndIsRepo(t *testing.T) {
+	t.Parallel()
+
 	r := repoWithCommit(t)
 	if !r.Exists() || !r.IsRepo() {
 		t.Error("a real repository must be recognised")
@@ -68,6 +72,8 @@ func TestExistsAndIsRepo(t *testing.T) {
 }
 
 func TestIsCleanAndCurrentBranch(t *testing.T) {
+	t.Parallel()
+
 	r := repoWithCommit(t)
 
 	branch, err := r.CurrentBranch()
@@ -91,6 +97,8 @@ func TestIsCleanAndCurrentBranch(t *testing.T) {
 
 // Ahead and behind are counted against the given ref, not swapped.
 func TestAheadBehind(t *testing.T) {
+	t.Parallel()
+
 	r := repoWithCommit(t)
 	run(t, r.Dir, "update-ref", "refs/remotes/origin/main", "HEAD")
 
@@ -112,6 +120,8 @@ func TestAheadBehind(t *testing.T) {
 }
 
 func TestBranchExistsAndRemoteBranches(t *testing.T) {
+	t.Parallel()
+
 	r := repoWithCommit(t)
 	run(t, r.Dir, "update-ref", "refs/remotes/origin/main", "HEAD")
 	run(t, r.Dir, "update-ref", "refs/remotes/origin/release-1.0", "HEAD")
@@ -143,6 +153,8 @@ func TestBranchExistsAndRemoteBranches(t *testing.T) {
 }
 
 func TestTags(t *testing.T) {
+	t.Parallel()
+
 	r := repoWithCommit(t)
 	run(t, r.Dir, "tag", "1.0.0")
 	run(t, r.Dir, "tag", "1.0.1-rc.0")
@@ -159,6 +171,8 @@ func TestTags(t *testing.T) {
 
 // Submodule helpers must not fail on a repository that has no .gitmodules.
 func TestSubmoduleHelpersWithoutGitmodules(t *testing.T) {
+	t.Parallel()
+
 	r := repoWithCommit(t)
 
 	paths, err := r.SubmodulePaths()
@@ -176,6 +190,8 @@ func TestSubmoduleHelpersWithoutGitmodules(t *testing.T) {
 }
 
 func TestSubmoduleAttributes(t *testing.T) {
+	t.Parallel()
+
 	r := repoWithCommit(t)
 
 	gitmodules := "" +
@@ -218,6 +234,8 @@ func TestSubmoduleAttributes(t *testing.T) {
 }
 
 func TestGitReportsFailureWithOutput(t *testing.T) {
+	t.Parallel()
+
 	r := repoWithCommit(t)
 
 	_, err := r.Git("rev-parse", "--verify", "refs/heads/nope")
@@ -231,6 +249,8 @@ func TestGitReportsFailureWithOutput(t *testing.T) {
 }
 
 func TestShEnv(t *testing.T) {
+	t.Parallel()
+
 	r := repoWithCommit(t)
 
 	if err := r.ShEnv("test \"$RT_TEST\" = yes", []string{"RT_TEST=yes"}); err != nil {
@@ -267,6 +287,8 @@ func TestClone(t *testing.T) {
 // An uninitialised submodule is an empty directory inside its parent, and
 // rev-parse answers about the parent unless the question is asked precisely.
 func TestIsRepoRootVsIsRepo(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	run(t, dir, "init", "--quiet")
 

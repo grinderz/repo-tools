@@ -7,6 +7,8 @@ import (
 )
 
 func TestParseSelection(t *testing.T) {
+	t.Parallel()
+
 	const count = 5
 
 	cases := []struct {
@@ -50,6 +52,8 @@ func TestParseSelection(t *testing.T) {
 }
 
 func TestParseSelectionNothing(t *testing.T) {
+	t.Parallel()
+
 	for _, answer := range []string{"", "   ", "q", "quit", "none", "NONE"} {
 		_, err := parseSelection(answer, 5)
 		if !errors.Is(err, errNothingSelected) {
@@ -59,6 +63,8 @@ func TestParseSelectionNothing(t *testing.T) {
 }
 
 func TestParseSelectionRejects(t *testing.T) {
+	t.Parallel()
+
 	cases := []struct {
 		answer, wantErr string
 	}{

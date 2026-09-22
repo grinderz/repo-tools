@@ -2,7 +2,6 @@
 package config
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"os"
@@ -500,18 +499,18 @@ func Load(path string) (*Config, error) {
 	}
 
 	if len(cfg.Projects) == 0 {
-		return nil, fmt.Errorf("%s: no projects defined", path)
+		return nil, fmt.Errorf("%s: %w", path, errNoProjects)
 	}
 
 	seen := make(map[string]bool, len(cfg.Projects))
 
 	for i, p := range cfg.Projects {
 		if p.Name == "" {
-			return nil, fmt.Errorf("projects[%d]: name is required", i)
+			return nil, fmt.Errorf("projects[%d]: name %w", i, errRequired)
 		}
 
 		if seen[p.Name] {
-			return nil, fmt.Errorf("projects: duplicate name %q", p.Name)
+			return nil, fmt.Errorf("projects: %w %q", errDuplicateName, p.Name)
 		}
 
 		seen[p.Name] = true
@@ -546,7 +545,7 @@ func (c *Config) applyDefaults() error {
 	switch c.Confirm {
 	case ConfirmDestructive, ConfirmAlways, ConfirmNever:
 	default:
-		return fmt.Errorf("confirm: %q is not one of destructive|always|never", c.Confirm)
+		return fmt.Errorf("confirm: %q %w destructive|always|never", c.Confirm, errNotOneOf)
 	}
 
 	if c.RcTagMessage == "" {
@@ -593,7 +592,7 @@ func (c *Config) applyDefaults() error {
 
 	for i, col := range c.Report {
 		if col.Column == "" || col.Value == "" {
-			return fmt.Errorf("report: entry %d needs both column and value", i+1)
+			return fmt.Errorf("report: entry %d %w", i+1, errReportEntry)
 		}
 	}
 
@@ -629,7 +628,7 @@ func (c *Config) validateProductVersion() error {
 	for _, name := range slices.Sorted(maps.Keys(templates)) {
 		for _, value := range templates[name] {
 			if strings.Contains(value, productVersionVar) {
-				return fmt.Errorf("%s uses %s but product_version is not set", name, productVersionVar)
+				return fmt.Errorf("%s uses %s but %w", name, productVersionVar, errNoProductVersion)
 			}
 		}
 	}
@@ -645,12 +644,12 @@ func (c *Config) validateDepsPins() error {
 		pin := c.DepsPins[kind]
 
 		if _, ok := c.DepsCmds[kind]; !ok {
-			return fmt.Errorf("deps_pins: %q is not a deps_cmds kind (defined: %s)",
-				kind, strings.Join(c.DepsKinds(), ", "))
+			return fmt.Errorf("deps_pins: %q %w (defined: %s)",
+				kind, errNotDepsKind, strings.Join(c.DepsKinds(), ", "))
 		}
 
 		if pin.File == "" || pin.Var == "" {
-			return fmt.Errorf("deps_pins: %s: file and var are both required", kind)
+			return fmt.Errorf("deps_pins: %s: %w", kind, errPinFields)
 		}
 	}
 
@@ -662,8 +661,8 @@ func (c *Config) validateDepsPins() error {
 func (c *Config) validateDepsCheckCmds() error {
 	for _, kind := range slices.Sorted(maps.Keys(c.DepsCheckCmds)) {
 		if _, ok := c.DepsCmds[kind]; !ok {
-			return fmt.Errorf("deps_check_cmds: %q is not a deps_cmds kind (defined: %s)",
-				kind, strings.Join(c.DepsKinds(), ", "))
+			return fmt.Errorf("deps_check_cmds: %q %w (defined: %s)",
+				kind, errNotDepsKind, strings.Join(c.DepsKinds(), ", "))
 		}
 	}
 
@@ -677,17 +676,17 @@ func (c *Config) validateDepsCheckCmds() error {
 func (c *Config) validateFlows() error {
 	for _, name := range slices.Sorted(maps.Keys(c.Flows)) {
 		if strings.TrimSpace(name) == "" {
-			return errors.New("flows: a flow needs a name")
+			return errFlowName
 		}
 
 		steps := c.Flows[name]
 		if len(steps) == 0 {
-			return fmt.Errorf("flows: %s lists no commands", name)
+			return fmt.Errorf("flows: %s %w", name, errNoFlowCommands)
 		}
 
 		for _, step := range steps {
 			if strings.TrimSpace(step) == "" {
-				return fmt.Errorf("flows: %s has an empty command", name)
+				return fmt.Errorf("flows: %s %w", name, errEmptyFlowCommand)
 			}
 		}
 	}
@@ -708,11 +707,11 @@ func (c *Config) validateDeps(deps, where string) error {
 	}
 
 	if len(c.DepsCmds) == 0 {
-		return fmt.Errorf("%s: deps: %q but deps_cmds defines no kinds", where, deps)
+		return fmt.Errorf("%s: deps: %q %w", where, deps, errNoDepsKinds)
 	}
 
-	return fmt.Errorf("%s: deps: %q is not in deps_cmds (defined: %s)",
-		where, deps, strings.Join(c.DepsKinds(), ", "))
+	return fmt.Errorf("%s: deps: %q %w (defined: %s)",
+		where, deps, errNotInDepsCmds, strings.Join(c.DepsKinds(), ", "))
 }
 
 // applyProjectDefaults resolves every unset project field against the defaults
@@ -756,7 +755,7 @@ func firstNonEmpty(values ...string) string {
 // prepareProject fills in per-project defaults and resolves its directory.
 func (c *Config) prepareProject(p *Project) error {
 	if p.Git == "" {
-		return fmt.Errorf("project %s: git url is required", p.Name)
+		return fmt.Errorf("project %s: git url %w", p.Name, errRequired)
 	}
 
 	c.applyProjectDefaults(p)
@@ -772,28 +771,28 @@ func (c *Config) prepareProject(p *Project) error {
 	switch p.CI {
 	case CINone, CIGitLab, CIGitHub:
 	default:
-		return fmt.Errorf("project %s: ci: %q is not one of %s, %s, %s",
-			p.Name, p.CI, CINone, CIGitLab, CIGitHub)
+		return fmt.Errorf("project %s: ci: %q %w %s, %s, %s",
+			p.Name, p.CI, errNotOneOf, CINone, CIGitLab, CIGitHub)
 	}
 
 	if p.ChangelogEnabled() && len(c.ChangelogCommands(p)) == 0 {
-		return fmt.Errorf("project %s: changelog is enabled but no changelog_cmds are set", p.Name)
+		return fmt.Errorf("project %s: %w", p.Name, errNoChangelogCmds)
 	}
 
 	// The branch itself may not exist yet, but its name has to be the shape the
 	// version arithmetic reads, or rc and tag would have nothing to count from.
 	if p.ReleaseBranch != "" && !strings.HasPrefix(p.ReleaseBranch, p.ReleaseBranchPrefix) {
-		return fmt.Errorf("project %s: release_branch %q does not start with %q",
-			p.Name, p.ReleaseBranch, p.ReleaseBranchPrefix)
+		return fmt.Errorf("project %s: release_branch %q %w %q",
+			p.Name, p.ReleaseBranch, errBadPrefix, p.ReleaseBranchPrefix)
 	}
 
 	for _, s := range p.Submodules {
 		if s.Path == "" {
-			return fmt.Errorf("project %s: submodule path is required", p.Name)
+			return fmt.Errorf("project %s: submodule path %w", p.Name, errRequired)
 		}
 
 		if s.FreezeTo == "" {
-			return fmt.Errorf("project %s: submodule %s: freeze_to is required", p.Name, s.Path)
+			return fmt.Errorf("project %s: submodule %s: freeze_to %w", p.Name, s.Path, errRequired)
 		}
 	}
 
@@ -803,7 +802,7 @@ func (c *Config) prepareProject(p *Project) error {
 	case c.ProjectsDir != "":
 		p.dir = filepath.Join(c.ProjectsDir, p.Name)
 	default:
-		return fmt.Errorf("project %s: no project_dir and no global projects_dir", p.Name)
+		return fmt.Errorf("project %s: %w", p.Name, errNoProjectDir)
 	}
 
 	return nil

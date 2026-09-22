@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -142,7 +141,7 @@ func updateBranchRef(r gitx.Repo, branch string) error {
 	}
 
 	if _, err := r.Git("merge-base", "--is-ancestor", branch, origin); err != nil {
-		return fmt.Errorf("%s has diverged from origin, fast-forward it by hand", branch)
+		return fmt.Errorf("%s %w, fast-forward it by hand", branch, errDiverged)
 	}
 
 	_, err := r.Git("update-ref", "refs/heads/"+branch, origin)
@@ -161,7 +160,7 @@ func syncProject(rctx *run.Ctx, p *config.Project, opts syncOptions) error {
 	}
 
 	if !r.RemoteBranchExists(p.DevBranch) {
-		return fmt.Errorf("origin/%s does not exist", p.DevBranch)
+		return fmt.Errorf("origin/%s %w", p.DevBranch, errNoRemoteBranch)
 	}
 
 	clean, err := r.IsClean()
@@ -170,7 +169,7 @@ func syncProject(rctx *run.Ctx, p *config.Project, opts syncOptions) error {
 	}
 
 	if !clean {
-		return errors.New("working tree is dirty, skipping fast-forward")
+		return fmt.Errorf("%w, skipping fast-forward", errDirty)
 	}
 
 	current, err := r.CurrentBranch()

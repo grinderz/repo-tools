@@ -3,6 +3,7 @@ package gitx
 import (
 	"io"
 	"os"
+	"sync/atomic"
 )
 
 // Some child programs colour their output even into a pipe — direnv's
@@ -10,20 +11,22 @@ import (
 // runs without colour, everything it streams from children is scrubbed of
 // escape sequences too, so piped output stays clean end to end.
 
+// Atomic only so that tests running in parallel can share it.
+//
 //nolint:gochecknoglobals // process-wide output mode, set once at startup
-var plainOutput bool
+var plainOutput atomic.Bool
 
 // SetPlainOutput makes every streamed child command's output pass through an
 // ANSI escape filter. The CLI sets it from the same decision that turns rt's
 // own colours off.
-func SetPlainOutput(plain bool) { plainOutput = plain }
+func SetPlainOutput(plain bool) { plainOutput.Store(plain) }
 
 func childStdout() io.Writer { return childWriter(os.Stdout) }
 
 func childStderr() io.Writer { return childWriter(os.Stderr) }
 
 func childWriter(w io.Writer) io.Writer {
-	if !plainOutput {
+	if !plainOutput.Load() {
 		return w
 	}
 

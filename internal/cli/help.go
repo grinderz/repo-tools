@@ -25,7 +25,7 @@ func newHelpCmd(root *cobra.Command) *cobra.Command {
 
 			target, _, err := root.Find(args)
 			if err != nil {
-				return fmt.Errorf("unknown command %q", strings.Join(args, " "))
+				return fmt.Errorf("%w %q", errUnknownCmd, strings.Join(args, " "))
 			}
 
 			return target.Help()

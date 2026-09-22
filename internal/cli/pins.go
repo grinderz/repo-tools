@@ -167,8 +167,8 @@ func rewritePins(rctx *run.Ctx, text, name string) (string, []pinChange, bool, e
 
 	if len(unknown) > 0 {
 		return text, nil, true, fmt.Errorf(
-			"%s lists %s, which %s not a project in this config", //nolint:err113 // human-facing
-			name, strings.Join(unknown, ", "), plural(len(unknown), "is", "are"))
+			"%s lists %s, which %s %w",
+			name, strings.Join(unknown, ", "), plural(len(unknown), "is", "are"), errNotAProject)
 	}
 
 	return strings.Join(lines, "\n"), changes, true, nil

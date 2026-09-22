@@ -3,13 +3,14 @@ package run
 import (
 	"os"
 	"strings"
+	"sync/atomic"
 )
 
 // The output speaks one visual language, the one a package manager taught
 // everyone's eyes (yay/pacman):
 //
 //	::  bold cyan — a phase: a plan header, a flow step, a question
-//	==> bold cyan — one project inside the batch
+//	==> bold green — one project inside the batch
 //	WARNING: / ERROR: — yellow and red, with the colon, always at the start
 //	dim — hints, side notes and defaults; plain indented text for details
 //
@@ -27,13 +28,14 @@ const (
 
 // colorEnabled is process-wide: it is decided once from the flags, the config
 // and the terminal, and every printer in the batch obeys the same answer.
-var colorEnabled bool //nolint:gochecknoglobals // one terminal per process
+// Atomic only so that tests running in parallel can share it.
+var colorEnabled atomic.Bool //nolint:gochecknoglobals // one terminal per process
 
 // SetColor fixes whether output is coloured.
-func SetColor(on bool) { colorEnabled = on }
+func SetColor(on bool) { colorEnabled.Store(on) }
 
 // ColorEnabled reports the decision, for callers that pass it on to git.
-func ColorEnabled() bool { return colorEnabled }
+func ColorEnabled() bool { return colorEnabled.Load() }
 
 // AutoColor is the default: colour when a terminal is attached and nobody
 // opted out through the usual environment variables.
@@ -48,7 +50,7 @@ func AutoColor() bool {
 }
 
 func paint(code, text string) string {
-	if !colorEnabled || text == "" {
+	if !colorEnabled.Load() || text == "" {
 		return text
 	}
 
@@ -63,6 +65,9 @@ func Fail() string { return Red("ERROR:") }
 
 // Marker is the phase mark every header and question starts with.
 func Marker() string { return Bold(Cyan("::")) }
+
+// Arrow is the mark a project line inside a batch starts with.
+func Arrow() string { return Bold(Green("==>")) }
 
 func Bold(text string) string   { return paint(codeBold, text) }
 func Dim(text string) string    { return paint(codeDim, text) }

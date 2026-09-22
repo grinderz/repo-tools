@@ -9,6 +9,8 @@ import (
 
 // A value with a literal | must not break the table it sits in.
 func TestMarkdownRow(t *testing.T) {
+	t.Parallel()
+
 	if got := markdownRow([]string{"a", "b|c"}); got != `| a | b\|c |` {
 		t.Errorf("row = %q", got)
 	}
@@ -20,6 +22,8 @@ func TestMarkdownRow(t *testing.T) {
 
 // Missing facts render as a dash: a table cell is no place for an error.
 func TestReportVarsWithoutAClone(t *testing.T) {
+	t.Parallel()
+
 	p := &config.Project{Name: "ghost", DevBranch: "develop", ProjectDir: t.TempDir()}
 
 	vars := reportVars(testCtx(), p)
@@ -35,6 +39,8 @@ func TestReportVarsWithoutAClone(t *testing.T) {
 // The dev config reads the dev branch head; a tag on the repository shows up
 // as the overall highest, since develop is not a release line.
 func TestReportVarsOnTheDevBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -60,6 +66,8 @@ func TestReportVarsOnTheDevBranch(t *testing.T) {
 // A release config names a release branch, so {tag} is that line's highest —
 // not a newer tag from another line.
 func TestReportVarsOnAReleaseBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	p.ReleaseBranch = "release-1.0"
@@ -79,6 +87,8 @@ func TestReportVarsOnAReleaseBranch(t *testing.T) {
 
 // Without a report list the table still says something useful.
 func TestReportColumnsDefault(t *testing.T) {
+	t.Parallel()
+
 	columns := reportColumns(&config.Config{})
 	if len(columns) != 3 || columns[0].Column != "Project" {
 		t.Errorf("columns = %v", columns)
@@ -93,6 +103,8 @@ func TestReportColumnsDefault(t *testing.T) {
 // {tag|branch} renders the first fact that exists: a line not tagged yet
 // says which branch ships instead of a bare dash.
 func TestExpandReportFallbacks(t *testing.T) {
+	t.Parallel()
+
 	vars := map[string]string{"tag": "-", "branch": "release-1.4", "commit": ""}
 
 	if got := expandReport("{tag|branch}", vars); got != "release-1.4" {

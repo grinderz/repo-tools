@@ -117,7 +117,7 @@ func printFlowPlan(name string, projects []string, cmds []*cobra.Command) {
 func flowCommands(root *cobra.Command, rctx *run.Ctx, name string) ([]*cobra.Command, error) {
 	steps, ok := rctx.Cfg.Flows[name]
 	if !ok {
-		return nil, fmt.Errorf("flow %q is not in the config%s", name, knownFlows(rctx.Cfg))
+		return nil, fmt.Errorf("flow %q %w%s", name, errUnknownFlow, knownFlows(rctx.Cfg))
 	}
 
 	cmds := make([]*cobra.Command, 0, len(steps))
@@ -160,19 +160,19 @@ func resolveFlowStep(root *cobra.Command, name, step string) (*cobra.Command, er
 
 	target, _, err := root.Find(strings.Fields(step))
 	if err == nil && target.Name() == flowCmdName {
-		return nil, fmt.Errorf("flow %s: a flow cannot run another flow", name)
+		return nil, fmt.Errorf("flow %s: %w", name, errFlowInFlow)
 	}
 
 	if err != nil || commandKey(target) != key {
-		return nil, fmt.Errorf("flow %s: %q is not a command", name, step)
+		return nil, fmt.Errorf("flow %s: %q %w", name, step, errNotACommand)
 	}
 
 	if target.RunE == nil {
-		return nil, fmt.Errorf("flow %s: %q is a group, name one of its commands", name, step)
+		return nil, fmt.Errorf("flow %s: %q %w", name, step, errGroupStep)
 	}
 
 	if reason, banned := flowBanned[key]; banned {
-		return nil, fmt.Errorf("flow %s: %q cannot be a flow step: %s", name, step, reason)
+		return nil, fmt.Errorf("flow %s: %q %w: %s", name, step, errNotAFlowStep, reason)
 	}
 
 	return target, nil

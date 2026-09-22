@@ -79,7 +79,7 @@ func parseRange(field string, count int) (int, int, error) {
 	}
 
 	if upto < from {
-		return 0, 0, fmt.Errorf("range %s runs backwards", field)
+		return 0, 0, fmt.Errorf("range %s %w", field, errBackwards)
 	}
 
 	return from, upto, nil
@@ -88,11 +88,11 @@ func parseRange(field string, count int) (int, int, error) {
 func parseIndex(s string, count int) (int, error) {
 	index, err := strconv.Atoi(strings.TrimSpace(s))
 	if err != nil {
-		return 0, fmt.Errorf("%q is not a number", s)
+		return 0, fmt.Errorf("%q %w", s, errNotANumber)
 	}
 
 	if index < 1 || index > count {
-		return 0, fmt.Errorf("%d is out of range 1-%d", index, count)
+		return 0, fmt.Errorf("%d %w 1-%d", index, errOutOfRange, count)
 	}
 
 	return index, nil

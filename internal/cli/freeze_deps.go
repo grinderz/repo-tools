@@ -273,8 +273,8 @@ func resolveFreezeBranch(
 	if sm.FreezeTo == config.FreezeToProject {
 		provider := rctx.Cfg.ProjectByGit(url)
 		if provider == nil {
-			return "", fmt.Errorf("%s is not a project in this config, so %q has no branch to follow",
-				url, config.FreezeToProject)
+			return "", fmt.Errorf("%s is %w, so %q has no branch to follow",
+				url, errNotAProject, config.FreezeToProject)
 		}
 
 		return provider.TargetBranch(), nil
@@ -285,13 +285,13 @@ func resolveFreezeBranch(
 	if branches == nil {
 		branches, err = gitx.LsRemoteBranches(url)
 		if err != nil {
-			return "", fmt.Errorf("%s: %s", url, firstLine(err.Error())) //nolint:err113 // compact, human-facing
+			return "", fmt.Errorf("%s: %w", url, briefError{err})
 		}
 	}
 
 	name, _, ok := gitx.LatestReleaseBranch(branches, prefix)
 	if !ok {
-		return "", fmt.Errorf("no %sX.Y branch in %s", prefix, url)
+		return "", fmt.Errorf("%w matching %sX.Y in %s", errNoReleaseBranch, prefix, url)
 	}
 
 	return name, nil

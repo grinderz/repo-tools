@@ -8,6 +8,8 @@ import (
 // The stripper removes whole escape sequences, including one split across two
 // writes — which is how they arrive from a streaming child.
 func TestAnsiStripper(t *testing.T) {
+	t.Parallel()
+
 	var out strings.Builder
 
 	s := &ansiStripper{w: &out}

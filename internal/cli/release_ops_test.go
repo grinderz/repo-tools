@@ -11,6 +11,8 @@ import (
 )
 
 func TestNextReleaseBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -40,6 +42,8 @@ func TestNextReleaseBranch(t *testing.T) {
 
 // The very first release branch of a project has nothing to bump from.
 func TestNextReleaseBranchWithoutHistory(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -53,6 +57,8 @@ func TestNextReleaseBranchWithoutHistory(t *testing.T) {
 }
 
 func TestTagForAndTagExists(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 	ver := gitx.ReleaseVer{Major: 1, Minor: 0}
@@ -83,6 +89,8 @@ func TestTagForAndTagExists(t *testing.T) {
 // A failed push must not leave the tag behind, or the next run would report it
 // as already existing and skip the project.
 func TestCreateTagRemovesTheTagWhenPushFails(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -105,6 +113,8 @@ func TestCreateTagRemovesTheTagWhenPushFails(t *testing.T) {
 }
 
 func TestSyncProjectFastForwardsTheDevBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -128,6 +138,8 @@ func TestSyncProjectFastForwardsTheDevBranch(t *testing.T) {
 }
 
 func TestSyncProjectRefusesDirtyTree(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -146,6 +158,8 @@ func TestSyncProjectRefusesDirtyTree(t *testing.T) {
 
 // The dev branch is updated even while another branch is checked out.
 func TestSyncProjectUpdatesDevBranchFromAnotherBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -177,6 +191,8 @@ func TestSyncProjectUpdatesDevBranchFromAnotherBranch(t *testing.T) {
 // dev branch with the submodules on that branch's pins, not on the ones the
 // release branch left in the worktree.
 func TestSyncProjectCheckoutSwitchesToTheDevBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -208,6 +224,8 @@ func TestSyncProjectCheckoutSwitchesToTheDevBranch(t *testing.T) {
 // A dev branch that only origin has is created as a tracking branch, the way
 // a fresh clone of one project among many starts out.
 func TestSyncProjectCheckoutCreatesTheDevBranchFromOrigin(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -240,6 +258,8 @@ func TestSyncProjectCheckoutCreatesTheDevBranchFromOrigin(t *testing.T) {
 // The plan is where a dirty tree is caught: the project is skipped with the
 // changes named, before anything else in the batch moves.
 func TestPlanSyncCheckoutSkipsADirtyTree(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -265,6 +285,8 @@ func TestPlanSyncCheckoutSkipsADirtyTree(t *testing.T) {
 // A clean tree on another branch plans the switch and names where it starts
 // from; the dev branch itself has nothing to switch.
 func TestPlanSyncCheckoutNamesTheSwitch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -282,6 +304,7 @@ func TestPlanSyncCheckoutNamesTheSwitch(t *testing.T) {
 	}
 }
 
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestPrintCandidatesNumbering(t *testing.T) {
 	project := &config.Project{Name: "api", DevBranch: "develop"}
 	set := candidateSet{
@@ -315,6 +338,8 @@ func TestPrintCandidatesNumbering(t *testing.T) {
 
 // A project with release_tags: false is planned as a skip by both tag commands.
 func TestPlanTagSkipsProjectsWithTagsDisabled(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	off := false
@@ -335,6 +360,8 @@ func TestPlanTagSkipsProjectsWithTagsDisabled(t *testing.T) {
 // A tag message can list what the tag contains: everything since the previous
 // tag of the same release branch.
 func TestTagMessageListsCommitsSinceThePreviousTag(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -396,6 +423,8 @@ func TestTagMessageListsCommitsSinceThePreviousTag(t *testing.T) {
 // Without a previous tag the list is what the release branch has and the dev
 // branch does not — the cherry-picks.
 func TestTagMessageWithoutAPreviousTagListsCherryPicks(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -419,6 +448,8 @@ func TestTagMessageWithoutAPreviousTagListsCherryPicks(t *testing.T) {
 // A template that asks for no commit list must not read the history at all,
 // and the placeholders stay empty rather than turning into stray text.
 func TestTagMessageWithoutCommitPlaceholders(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	ver, _ := gitx.ParseReleaseBranch("release-1.0", "release-")
@@ -437,6 +468,8 @@ func TestTagMessageWithoutCommitPlaceholders(t *testing.T) {
 
 // The tag message and the commit it lands on are shown before the tag is
 // created; a tag cannot be amended once pushed.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
 func TestCreateTagShowsTheMessageFirst(t *testing.T) {
 	f := newFixture(t)
 	p := f.project(t)
@@ -470,6 +503,8 @@ func TestCreateTagShowsTheMessageFirst(t *testing.T) {
 // The plan names the commit a release branch would be cut from: cutting one
 // merge too late is the mistake worth catching before the push.
 func TestPlanReleaseBranchShowsTheSourceCommit(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	publishOrigin(t, f.parent, "develop", "release-1.0")
@@ -493,6 +528,8 @@ func TestPlanReleaseBranchShowsTheSourceCommit(t *testing.T) {
 // A final tag on a branch that has moved past its last rc is a release of
 // something nobody tested; the plan says so rather than silently tagging.
 func TestFinalTagWarnsWhenTheBranchMovedPastTheRc(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -517,6 +554,8 @@ func TestFinalTagWarnsWhenTheBranchMovedPastTheRc(t *testing.T) {
 }
 
 func TestFinalTagWarnsWithoutAnyRc(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	publishOrigin(t, f.parent, "develop", "release-1.0")
@@ -530,6 +569,8 @@ func TestFinalTagWarnsWithoutAnyRc(t *testing.T) {
 // Tagging a release whose submodules still track the dev branch produces a tag
 // that is not pinned to anything.
 func TestTagWarnsAboutUnfrozenSubmodules(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	enabled := true
@@ -561,6 +602,8 @@ func TestTagWarnsAboutUnfrozenSubmodules(t *testing.T) {
 // a git error to relay: there is no commit to tag and no history to list, and a
 // message template with {commits} used to surface that as raw git output.
 func TestPlanTagSkipsAPendingReleaseBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	p.ReleaseBranch = "release-9.9"
@@ -577,6 +620,8 @@ func TestPlanTagSkipsAPendingReleaseBranch(t *testing.T) {
 // The range a tag message lists: the previous tag of this line, else the
 // previous line, else the cherry-picks a project with no tags at all has.
 func TestTagRange(t *testing.T) {
+	t.Parallel()
+
 	p := &config.Project{DevBranch: "develop"}
 	ver := gitx.ReleaseVer{Major: 1, Minor: 2}
 
@@ -597,6 +642,8 @@ func TestTagRange(t *testing.T) {
 // key touch — is reused when it holds nothing of its own, and refused when
 // it does: rt must not force-move somebody's commits.
 func TestEnsureLocalBranch(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 
@@ -634,6 +681,8 @@ func TestEnsureLocalBranch(t *testing.T) {
 // Rerunning a flow over an unchanged branch must not mint a new tag for the
 // same commit; the final that promotes an rc is the one exception.
 func TestPlanTagSkipsAnAlreadyTaggedHead(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 

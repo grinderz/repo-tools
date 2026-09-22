@@ -13,6 +13,8 @@ import (
 // A pin at the head of its branch is in step; after the branch moves, the
 // same pin is behind by exactly the commits it is missing.
 func TestDriftAgainst(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	sub := gitx.Repo{Dir: filepath.Join(f.parent, "sub")}
@@ -44,6 +46,8 @@ func TestDriftAgainst(t *testing.T) {
 
 // The submodule report reads the pins of the target ref, not the checkout.
 func TestSubmodulePinLines(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -59,6 +63,8 @@ func TestSubmodulePinLines(t *testing.T) {
 }
 
 func TestGoModVersion(t *testing.T) {
+	t.Parallel()
+
 	gomod := "module example.com/app\n\nrequire (\n\texample.com/lib v1.2.3\n" +
 		"\texample.com/lib2 v0.0.0-20260810120000-abcdef123456\n)\n"
 
@@ -78,6 +84,8 @@ func TestGoModVersion(t *testing.T) {
 // A pseudo-version names its commit outright; a released version goes through
 // the tag, spelled with or without the leading v.
 func TestVersionCommit(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 	head := git(t, f.parent, "rev-parse", "HEAD")
@@ -98,6 +106,8 @@ func TestVersionCommit(t *testing.T) {
 // together: a pin on the config's branch with go.mod at its head is ok, a pin
 // on another branch is called out.
 func TestModulePinLines(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 
@@ -148,6 +158,8 @@ func TestModulePinLines(t *testing.T) {
 // deps check runs the kind's commands and folds their exit codes into one
 // verdict per project.
 func TestDepsCheckProject(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	p.Deps = "go"

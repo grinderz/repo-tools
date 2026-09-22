@@ -159,7 +159,7 @@ func (r Repo) AheadBehind(ref string) (int, int, error) {
 
 	fields := strings.Fields(out)
 	if len(fields) != keyValueFields {
-		return 0, 0, fmt.Errorf("unexpected rev-list output: %q", out)
+		return 0, 0, fmt.Errorf("%w: %q", errRevListOutput, out)
 	}
 
 	behind, _ := strconv.Atoi(fields[0])
@@ -300,7 +300,7 @@ func (r Repo) SubmoduleURLAt(ref, path string) (string, error) {
 
 	url, ok := byName[name]
 	if !ok {
-		return "", fmt.Errorf("submodule %q has no url in .gitmodules", path)
+		return "", fmt.Errorf("submodule %q %w", path, errNoSubmoduleURL)
 	}
 
 	return url, nil
@@ -318,7 +318,7 @@ func (r Repo) submoduleNameByPathAt(ref, path string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("submodule with path %q not found in .gitmodules", path)
+	return "", fmt.Errorf("submodule with path %q %w", path, errNoSubmodule)
 }
 
 func (r Repo) shell(prefix []string, command string, env []string) error {

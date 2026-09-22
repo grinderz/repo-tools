@@ -186,11 +186,11 @@ func checkDisabled(cmd *cobra.Command, cfg *config.Config, path string) error {
 
 		target, _, err := cmd.Root().Find(strings.Fields(entry))
 		if err != nil || commandKey(target) != want {
-			return fmt.Errorf("disable: %q is not a command", entry)
+			return fmt.Errorf("disable: %q %w", entry, errNotACommand)
 		}
 
 		if running == want || strings.HasPrefix(running, want+" ") {
-			return fmt.Errorf("%s is disabled in %s", running, path)
+			return fmt.Errorf("%s %w %s", running, errDisabled, path)
 		}
 	}
 
@@ -238,7 +238,7 @@ func reportInputs(path string, rctx *run.Ctx) {
 // contradiction, not a preference.
 func rejectBothFlags(on, off bool, onName, offName string) error {
 	if on && off {
-		return fmt.Errorf("%s and %s are mutually exclusive", onName, offName)
+		return fmt.Errorf("%s and %s %w", onName, offName, errMutuallyExcl)
 	}
 
 	return nil

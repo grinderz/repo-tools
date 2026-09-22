@@ -75,8 +75,8 @@ func direnvState(rctx *run.Ctx, r gitx.Repo) (bool, bool) {
 		return false, false
 	}
 
-	if blocked, ok := direnvBlocked[r.Dir]; ok {
-		return true, blocked
+	if blocked, ok := direnvBlocked.Load(r.Dir); ok {
+		return true, blocked.(bool) //nolint:forcetypeassert // only bools are stored
 	}
 
 	// A blocked .envrc makes direnv refuse outright, and its message is the
@@ -85,14 +85,14 @@ func direnvState(rctx *run.Ctx, r gitx.Repo) (bool, bool) {
 	out, _ := exec.CommandContext(context.Background(), "direnv", "exec", r.Dir, "true").CombinedOutput()
 
 	blocked := strings.Contains(string(out), "is blocked")
-	direnvBlocked[r.Dir] = blocked
+	direnvBlocked.Store(r.Dir, blocked)
 
 	return true, blocked
 }
 
-// direnvBlocked holds one probe result per project directory; rt runs its
-// batch sequentially, so a plain map is enough.
-var direnvBlocked = map[string]bool{} //nolint:gochecknoglobals // per-process probe cache
+// direnvBlocked holds one probe result per project directory. rt runs its
+// batch sequentially; the sync.Map is for the tests, which do not.
+var direnvBlocked sync.Map //nolint:gochecknoglobals // per-process probe cache
 
 // pipefail makes a shell command fail when any part of a pipeline does. The
 // changelog commands are pipelines writing to a file, so without it a missing
@@ -125,7 +125,7 @@ func runShell(rctx *run.Ctx, r gitx.Repo, command string, env []string) error {
 	case blocked:
 		// Running without the .envrc would reach the public proxy instead of
 		// the internal one and fail later, in a much less obvious way.
-		return fmt.Errorf("%s/%s is blocked, run: direnv allow %s", r.Dir, envrcFile, r.Dir)
+		return fmt.Errorf("%s/%s %w %s", r.Dir, envrcFile, errEnvrcBlocked, r.Dir)
 	case use:
 		return r.ShDirenv(command, env)
 	default:
@@ -211,10 +211,10 @@ func updateSubmoduleRemote(rctx *run.Ctx, p *config.Project, r gitx.Repo, path, 
 
 	if !sub.RemoteBranchExists(branch) {
 		if fetchErr != nil {
-			return fmt.Errorf("submodule %s: cannot fetch origin: %s", path, firstLine(fetchErr.Error()))
+			return fmt.Errorf("submodule %s: %w origin: %w", path, errCannotFetch, briefError{fetchErr})
 		}
 
-		return fmt.Errorf("submodule %s: origin/%s does not exist", path, branch)
+		return fmt.Errorf("submodule %s: origin/%s %w", path, branch, errNoRemoteBranch)
 	}
 
 	if err := moveGitlink(r, sub, path, branch); err != nil {
@@ -553,7 +553,12 @@ func latestRelease(r gitx.Repo, p *config.Project, override string) (string, git
 	if override != "" {
 		v, ok := gitx.ParseReleaseBranch(override, p.ReleaseBranchPrefix)
 		if !ok {
-			return "", gitx.ReleaseVer{}, fmt.Errorf("branch %q does not match %sX.Y", override, p.ReleaseBranchPrefix)
+			return "", gitx.ReleaseVer{}, fmt.Errorf(
+				"branch %q %w %sX.Y",
+				override,
+				errBadReleaseName,
+				p.ReleaseBranchPrefix,
+			)
 		}
 
 		return override, v, nil
@@ -567,8 +572,8 @@ func latestRelease(r gitx.Repo, p *config.Project, override string) (string, git
 	name, v, ok := gitx.LatestReleaseBranch(branches, p.ReleaseBranchPrefix)
 	if !ok {
 		return "", gitx.ReleaseVer{}, fmt.Errorf(
-			"no %sX.Y branch on origin, run release branch first",
-			p.ReleaseBranchPrefix,
+			"%w matching %sX.Y on origin, run release branch first",
+			errNoReleaseBranch, p.ReleaseBranchPrefix,
 		)
 	}
 
@@ -589,8 +594,11 @@ func releaseRef(r gitx.Repo, branch string) (string, string) {
 
 // pendingReleaseWarn is what every command says about a release branch the
 // config names before anyone has created it, so they all say it the same way.
-func pendingReleaseWarn(branch string) string {
-	return fmt.Sprintf("origin/%s does not exist yet, run release branch to create it", branch)
+func pendingReleaseWarn(branch string) string { return pendingRelease(branch).Error() }
+
+// pendingRelease is pendingReleaseWarn as an error.
+func pendingRelease(branch string) error {
+	return fmt.Errorf("origin/%s %w", branch, errPendingRelease)
 }
 
 // checkoutTracking checks out branch, creating a local tracking branch when
@@ -606,7 +614,7 @@ func checkoutTracking(r gitx.Repo, branch string) error {
 			return err
 		}
 	default:
-		return fmt.Errorf("branch %q exists neither locally nor on origin", branch)
+		return fmt.Errorf("branch %q %w", branch, errNoBranch)
 	}
 
 	if !r.RemoteBranchExists(branch) {
@@ -625,8 +633,8 @@ func checkoutTracking(r gitx.Repo, branch string) error {
 	}
 
 	if ahead > 0 {
-		return fmt.Errorf("%s has %d local commit(s) that are not on origin, push or reset them first",
-			branch, ahead)
+		return fmt.Errorf("%s has %d %w, push or reset them first",
+			branch, ahead, errUnpushed)
 	}
 
 	return nil
@@ -642,8 +650,7 @@ func startDirty(rctx *run.Ctx, r gitx.Repo, allow bool) error {
 	}
 
 	if !rctx.ShowDiff() || !rctx.Interactive() {
-		return errors.New("--allow-dirty needs the diff review and someone to answer it: " +
-			"drop --no-diff/--yes, or clean the tree with repo clean")
+		return errDirtyUnattended
 	}
 
 	changed, err := r.Git("status", "--porcelain")
@@ -672,7 +679,7 @@ func requireClean(r gitx.Repo) error {
 		return nil
 	}
 
-	return fmt.Errorf("working tree is dirty, commit or discard first:\n%s\n%s", changed,
+	return fmt.Errorf("%w, commit or discard first:\n%s\n%s", errDirty, changed,
 		run.Dim(fmt.Sprintf("      git -C %s diff %s        # inspect\n"+
 			"      git -C %s checkout -- . && git -C %s submodule update   # discard",
 			r.Dir, submoduleLog, r.Dir, r.Dir)))
@@ -739,7 +746,7 @@ func fetch(rctx *run.Ctx, p *config.Project, r gitx.Repo) error {
 // even after the retries: a skip here would let a flow sail past the step —
 // which is how one release lost its rc tag to a missed hardware-key touch.
 func fetchFailed(err error) error {
-	return fmt.Errorf("fetch failed: %s", gitReason(err)) //nolint:err113 // human-facing
+	return fmt.Errorf("%w: %s", errFetchFailed, gitReason(err))
 }
 
 // fetchOrWarn refreshes remote refs, returning a compact reason on failure so

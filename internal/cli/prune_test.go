@@ -11,6 +11,8 @@ import (
 // A local release branch in step with origin is a leftover; one with its own
 // commits is somebody's work and stays.
 func TestPruneTargetsReleaseLeftover(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -47,6 +49,8 @@ func TestPruneTargetsReleaseLeftover(t *testing.T) {
 // A branch whose upstream vanished from origin is deleted only when origin
 // still carries its commits some other way.
 func TestPruneTargetsGoneUpstream(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 	r := gitx.Repo{Dir: f.parent}
@@ -107,6 +111,8 @@ func TestPruneTargetsGoneUpstream(t *testing.T) {
 
 // pruneBranches deletes exactly what the plan named.
 func TestPruneBranches(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	r := gitx.Repo{Dir: f.parent}
 
@@ -123,6 +129,8 @@ func TestPruneBranches(t *testing.T) {
 
 // exec builds one step per project and actually runs the command.
 func TestExecSteps(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -157,6 +165,8 @@ func TestExecSteps(t *testing.T) {
 
 // The notes section names the tag, the range, and the commits in it.
 func TestNotesSection(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 
@@ -191,6 +201,8 @@ func TestNotesSection(t *testing.T) {
 
 // The notes headings come from the config when it says so.
 func TestNotesTemplates(t *testing.T) {
+	t.Parallel()
+
 	f := newFixture(t)
 	p := f.project(t)
 

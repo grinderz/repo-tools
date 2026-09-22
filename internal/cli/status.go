@@ -33,7 +33,7 @@ func newStatusCmd(rctx *run.Ctx, name string) *cobra.Command {
 func reportStatus(rctx *run.Ctx, p *config.Project) {
 	// The padded ==> header keeps the rows scannable as a table while the
 	// project name gets the same marker every other per-project block has.
-	header := run.Cyan("==>") + " " + padCell(p.Name, statusNameWidth, run.Bold)
+	header := run.Arrow() + " " + padCell(p.Name, statusNameWidth, run.Bold)
 	r := repoOf(p)
 
 	if reason := missingRepo(r); reason != "" {

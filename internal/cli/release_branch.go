@@ -135,7 +135,7 @@ func nextReleaseBranch(r gitx.Repo, p *config.Project, version string, major boo
 	if version != "" {
 		name := p.ReleaseBranchPrefix + version
 		if _, ok := gitx.ParseReleaseBranch(name, p.ReleaseBranchPrefix); !ok {
-			return "", fmt.Errorf("version %q is not X.Y", version)
+			return "", fmt.Errorf("version %q %w", version, errNotXY)
 		}
 
 		return name, nil
@@ -146,7 +146,12 @@ func nextReleaseBranch(r gitx.Repo, p *config.Project, version string, major boo
 	// still overrides, which is how a config gets bumped past its own name.
 	if p.ReleaseBranch != "" && !major {
 		if _, ok := gitx.ParseReleaseBranch(p.ReleaseBranch, p.ReleaseBranchPrefix); !ok {
-			return "", fmt.Errorf("release_branch %q is not %sX.Y", p.ReleaseBranch, p.ReleaseBranchPrefix)
+			return "", fmt.Errorf(
+				"release_branch %q %w %sX.Y",
+				p.ReleaseBranch,
+				errBadReleaseName,
+				p.ReleaseBranchPrefix,
+			)
 		}
 
 		return p.ReleaseBranch, nil
@@ -181,8 +186,8 @@ func ensureLocalBranch(r gitx.Repo, branch, from string) error {
 	}
 
 	if _, err := r.Git("merge-base", "--is-ancestor", branch, from); err != nil {
-		return fmt.Errorf("local %s already exists and has commits that are not on %s, inspect it first",
-			branch, from)
+		return fmt.Errorf("local %s %w %s, inspect it first",
+			branch, errLocalAhead, from)
 	}
 
 	current, err := r.CurrentBranch()
@@ -206,7 +211,7 @@ func ensureLocalBranch(r gitx.Repo, branch, from string) error {
 func createReleaseBranch(rctx *run.Ctx, p *config.Project, branch string) error {
 	r := repoOf(p)
 	if !r.RemoteBranchExists(p.DevBranch) {
-		return fmt.Errorf("origin/%s does not exist", p.DevBranch)
+		return fmt.Errorf("origin/%s %w", p.DevBranch, errNoRemoteBranch)
 	}
 
 	ok, err := reviewBranch(rctx, r, p, branch)

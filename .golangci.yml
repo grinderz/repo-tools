@@ -10,19 +10,14 @@ linters:
   disable:
     - depguard
     - exhaustruct
+    - exhaustruct_v5 # exhaustruct's name since golangci-lint 2.13
+    - forbidigo # a CLI prints with fmt.Print*: reporting to stdout is the product
     - godox
     - gomodguard # deprecated since v2.12.0, replaced by gomodguard_v2
     - nlreturn
     - noinlineerr
-    - wsl
-    - wsl_v5 # same style rules as wsl, which upstream replaced it with
-    # This is a CLI: reporting to stdout is the product, and its errors are
-    # read by a human rather than matched by callers.
-    - forbidigo
-    - err113
-    # Tests drive real git repositories on disk and poke unexported helpers.
-    - paralleltest
-    - testpackage
+    - testpackage # tests drive real git repositories and poke unexported helpers
+    - wsl # replaced upstream by wsl_v5, which stays on
   settings:
     cyclop:
       max-complexity: 20
@@ -87,6 +82,7 @@ linters:
         source: '^//go:generate '
       - linters:
           - dupl
+          - err113 # a test's throwaway error is matched by nobody
           - funlen
           - goconst
           - gosec
@@ -109,8 +105,6 @@ formatters:
         - default
         - prefix(github.com/grinderz/repo-tools)
       custom-order: false
-    gofumpt:
-      module-path: github.com/grinderz/repo-tools
   exclusions:
     generated: lax
     paths:

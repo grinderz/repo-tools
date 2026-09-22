@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -336,7 +335,7 @@ func rebaseLoop(rctx *run.Ctx, r gitx.Repo, source, targetRef string) error {
 	}
 
 	if !rebaseInProgress(r) {
-		return fmt.Errorf("rebase failed to start: %s", firstLine(out))
+		return fmt.Errorf("%w: %s", errRebaseStart, firstLine(out))
 	}
 
 	for rebaseInProgress(r) {
@@ -356,7 +355,7 @@ func rebaseLoop(rctx *run.Ctx, r gitx.Repo, source, targetRef string) error {
 			if !stagedEmpty(r) {
 				return abortRebase(
 					r,
-					fmt.Errorf("rebase --continue failed with a non-empty index: %s", firstLine(cont)),
+					fmt.Errorf("%w: %s", errRebaseContinue, firstLine(cont)),
 				)
 			}
 
@@ -434,7 +433,7 @@ func resolveRebasePins(r gitx.Repo, source, targetRef string, conflicted []strin
 
 	for _, path := range conflicted {
 		if !isSubmodule[path] {
-			return fmt.Errorf("conflict in non-submodule path %q", path)
+			return fmt.Errorf("%w %q", errForeignConflict, path)
 		}
 
 		if err := resolveOnePin(r, source, targetRef, path); err != nil {
@@ -455,7 +454,7 @@ func resolveOnePin(r gitx.Repo, source, targetRef, path string) error {
 
 	branch := rebasePinBranch(sub, source, tracked)
 	if branch == "" {
-		return fmt.Errorf("submodule %s tracks no branch and has no %q branch of its own", path, source)
+		return fmt.Errorf("submodule %s %w and has no %q branch of its own", path, errTracksNothing, source)
 	}
 
 	head, err := fetchSubmoduleHead(sub, path, branch)
@@ -516,7 +515,7 @@ const maxSubRebaseDepth = 5
 // It returns the paths whose branch was handled, for the re-pin afterwards.
 func rebaseSubBranches(rctx *run.Ctx, r gitx.Repo, source, targetRef string, depth int) ([]string, error) {
 	if depth >= maxSubRebaseDepth {
-		return nil, fmt.Errorf("submodules nest deeper than %d levels, refusing to recurse further", maxSubRebaseDepth)
+		return nil, fmt.Errorf("%w %d levels, refusing to recurse further", errTooDeep, maxSubRebaseDepth)
 	}
 
 	paths, err := r.SubmodulePaths()
@@ -556,7 +555,7 @@ func rebaseOneSub(rctx *run.Ctx, r, sub gitx.Repo, path, source, targetRef strin
 	if err != nil || target == "" {
 		target, err = r.SubmoduleBranch(path)
 		if err != nil || target == "" {
-			return errors.New("tracks no branch in .gitmodules, run deps freeze first") //nolint:err113 // human-facing
+			return fmt.Errorf("%w in .gitmodules, run deps freeze first", errTracksNothing)
 		}
 	}
 
@@ -616,9 +615,9 @@ func pushSubBranch(rctx *run.Ctx, sub gitx.Repo, path, source string) error {
 
 		if !ok {
 			return fmt.Errorf(
-				"declined pushing submodule %s; the parent would pin commits origin has never seen",
-				path,
-			) //nolint:err113 // human-facing
+				"%w submodule %s; the parent would pin commits origin has never seen",
+				errDeclinedPush, path,
+			)
 		}
 	}
 
@@ -664,7 +663,7 @@ func repinRebasedSubmodules(rctx *run.Ctx, r gitx.Repo, p *config.Project, sourc
 func fetchSubmoduleHead(sub gitx.Repo, path, branch string) (string, error) {
 	refspec := "refs/heads/" + branch + ":refs/remotes/origin/" + branch
 	if _, err := sub.Git("fetch", "--force", "origin", refspec); err != nil {
-		return "", fmt.Errorf("cannot fetch branch %q of submodule %s: %s", branch, path, gitReason(err))
+		return "", fmt.Errorf("%w branch %q of submodule %s: %s", errCannotFetch, branch, path, gitReason(err))
 	}
 
 	sha, err := sub.Git("rev-parse", "refs/remotes/origin/"+branch)
@@ -704,15 +703,15 @@ func checkPinReachable(sub gitx.Repo, path, branch, head, sha, origin string) er
 
 	if _, err := sub.Git("cat-file", "-e", sha+"^{commit}"); err != nil {
 		if _, err := sub.Git("fetch", "origin", sha); err != nil {
-			return fmt.Errorf("submodule %s: commit %s pinned by %s is unknown to the remote",
-				path, shorten(sha, shortSHALen), origin)
+			return fmt.Errorf("submodule %s: commit %s pinned by %s %w",
+				path, shorten(sha, shortSHALen), origin, errPinUnknown)
 		}
 	}
 
 	if _, err := sub.Git("merge-base", "--is-ancestor", sha, head); err != nil {
 		return fmt.Errorf(
-			"submodule %s: branch %q (%s) does not contain commit %s pinned by %s, rebase the submodule branch first",
-			path, branch, shorten(head, shortSHALen), shorten(sha, shortSHALen), origin)
+			"submodule %s: branch %q (%s) %w %s pinned by %s, rebase the submodule branch first",
+			path, branch, shorten(head, shortSHALen), errPinOffBranch, shorten(sha, shortSHALen), origin)
 	}
 
 	return nil

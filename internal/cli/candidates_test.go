@@ -24,6 +24,8 @@ func mustFilter(t *testing.T, tasks, greps []string) pickFilter {
 }
 
 func TestPickFilterEmptyKeepsEverything(t *testing.T) {
+	t.Parallel()
+
 	f := mustFilter(t, nil, nil)
 
 	if !f.empty() {
@@ -39,6 +41,8 @@ func TestPickFilterEmptyKeepsEverything(t *testing.T) {
 
 // The motivating case: three tickets, each with a different commit type.
 func TestPickFilterByTasks(t *testing.T) {
+	t.Parallel()
+
 	f := mustFilter(t, []string{"AB-3151", "AB-3595", "AB-1335"}, nil)
 
 	for _, subject := range []string{feat, fix, build} {
@@ -53,6 +57,8 @@ func TestPickFilterByTasks(t *testing.T) {
 }
 
 func TestPickFilterTaskIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
 	if !mustFilter(t, []string{"ab-3151"}, nil).matches(feat) {
 		t.Error("ticket ids should match regardless of case")
 	}
@@ -60,6 +66,8 @@ func TestPickFilterTaskIsCaseInsensitive(t *testing.T) {
 
 // A ticket id must not match a longer one that merely starts with it.
 func TestPickFilterTaskDoesNotMatchLongerId(t *testing.T) {
+	t.Parallel()
+
 	if mustFilter(t, []string{"AB-315"}, nil).matches(feat) {
 		t.Errorf("AB-315 must not select %q", feat)
 	}
@@ -70,6 +78,8 @@ func TestPickFilterTaskDoesNotMatchLongerId(t *testing.T) {
 }
 
 func TestPickFilterByGrep(t *testing.T) {
+	t.Parallel()
+
 	f := mustFilter(t, nil, []string{`^fix/`})
 
 	if !f.matches(fix) {
@@ -82,6 +92,8 @@ func TestPickFilterByGrep(t *testing.T) {
 }
 
 func TestPickFilterCombinesTermsWithOr(t *testing.T) {
+	t.Parallel()
+
 	f := mustFilter(t, []string{"AB-1335"}, []string{`^fix/`})
 
 	for _, subject := range []string{build, fix} {
@@ -96,6 +108,8 @@ func TestPickFilterCombinesTermsWithOr(t *testing.T) {
 }
 
 func TestPickFilterRejectsBadRegexp(t *testing.T) {
+	t.Parallel()
+
 	_, err := newPickFilter(nil, []string{"("}, "", "")
 	if err == nil {
 		t.Fatal("expected an error for an invalid regexp")
@@ -107,6 +121,8 @@ func TestPickFilterRejectsBadRegexp(t *testing.T) {
 }
 
 func TestPickFilterDescribe(t *testing.T) {
+	t.Parallel()
+
 	got := mustFilter(t, []string{"AB-1"}, []string{`^fix/`}).describe()
 	if got != "AB-1, ^fix/" {
 		t.Errorf("describe() = %q", got)
@@ -124,6 +140,8 @@ func TestPickFilterDescribe(t *testing.T) {
 
 // Dates scope the list; only subject terms decide what gets picked.
 func TestPickFilterDatesScopeButDoNotSelect(t *testing.T) {
+	t.Parallel()
+
 	dated, err := newPickFilter(nil, nil, "2026-08-01", "")
 	if err != nil {
 		t.Fatal(err)
