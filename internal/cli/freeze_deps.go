@@ -26,7 +26,7 @@ func newFreezeDepsCmd(rctx *run.Ctx, name string) *cobra.Command {
 		Short: "Pin submodules to release branches, update deps, commit and push",
 		Long: "On the release branch: rewrite submodule branches in .gitmodules,\n" +
 			"run git submodule update --remote, then run the dependency commands\n" +
-			"deps_cmds defines for the project's deps kind and push.",
+			"cmds.deps defines for the project's deps kind and push.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			projects, err := rctx.Select(args)
 			if err != nil {
@@ -58,7 +58,7 @@ func newFreezeDepsCmd(rctx *run.Ctx, name string) *cobra.Command {
 		"",
 		"release branch to freeze (default: the highest release branch on origin)",
 	)
-	c.Flags().BoolVar(&noDeps, "no-deps", false, "skip the deps_cmds, only move the submodule pins")
+	c.Flags().BoolVar(&noDeps, "no-deps", false, "skip the deps commands, only move the submodule pins")
 	c.Flags().BoolVar(&allowDirty, "allow-dirty", false,
 		"start on a working tree that already has changes, and commit them along (needs the diff review)")
 
@@ -132,7 +132,7 @@ func planFreezeDeps(
 	}
 
 	st.Plan = append(st.Plan,
-		commitPlanLines(rctx, p, branch, "anything changed", freezeMessage(rctx, p, branch))...)
+		commitPlanLines(rctx, p, cmdDepsFreeze, branch, "anything changed", freezeMessage(rctx, p, branch))...)
 	st.Exec = func() error { return freezeDeps(rctx, p, branch, noDeps, allowDirty) }
 
 	return st, nil
@@ -210,7 +210,7 @@ func planSubmoduleFreeze(rctx *run.Ctx, r gitx.Repo, p *config.Project, ref stri
 
 // depsCmds returns the dependency commands of a project with the message
 // placeholders expanded. Nothing about a language is built in: the commands
-// come from deps_cmds in the config.
+// come from cmds.deps in the config.
 func depsCmds(rctx *run.Ctx, p *config.Project, branch string) []string {
 	cmds := rctx.Cfg.DepsCommands(p)
 	vars := changelogVars(rctx, p, branch)
@@ -366,7 +366,7 @@ func freezeDeps(rctx *run.Ctx, p *config.Project, branch string, noDeps, allowDi
 
 	msg := freezeMessage(rctx, p, branch)
 
-	return commitAndPush(rctx, r, p, branch, msg, "nothing to freeze, already up to date")
+	return commitAndPush(rctx, r, p, cmdDepsFreeze, branch, msg, "nothing to freeze, already up to date")
 }
 
 func freezeSubmodule(rctx *run.Ctx, r gitx.Repo, p *config.Project, sm config.Submodule) error {
@@ -405,7 +405,8 @@ func freezeMessage(rctx *run.Ctx, p *config.Project, branch string) string {
 // prints noChanges when there is nothing to commit. Unless disabled, the
 // staged diff is shown and confirmed first; a project with ci set then has
 // the pipeline of the pushed commit watched.
-func commitAndPush(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, msg, noChanges string) error {
+// command names the caller for the merge request branch, when that mode is on.
+func commitAndPush(rctx *run.Ctx, r gitx.Repo, p *config.Project, command, branch, msg, noChanges string) error {
 	changed, err := r.Git("status", "--porcelain")
 	if err != nil {
 		return err
@@ -423,7 +424,9 @@ func commitAndPush(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, msg, n
 		return err
 	}
 
-	ok, err := reviewStaged(rctx, r, p.Name, msg)
+	m := planMergeRequest(rctx, p, command, branch, msg)
+
+	ok, err := reviewStaged(rctx, r, p.Name, msg, m)
 	if err != nil {
 		return err
 	}
@@ -434,6 +437,23 @@ func commitAndPush(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, msg, n
 		fmt.Println(run.Dim(fmt.Sprintf("      git -C %s reset --hard    # discard", r.Dir)))
 
 		return errDeclined
+	}
+
+	if m != nil {
+		sha, url, err := commitToMergeRequest(rctx, r, p, m, msg)
+		if err != nil {
+			return err
+		}
+
+		if err := watchCI(rctx, r, p, sha, m.Branch, msg); err != nil {
+			return err
+		}
+
+		if needs := mrWaitFor(rctx, p); len(needs) > 0 {
+			return waitMerged(rctx, r, p, url, needs)
+		}
+
+		return nil
 	}
 
 	if _, err := r.Git("commit", "-m", msg); err != nil {

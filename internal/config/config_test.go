@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func write(t *testing.T, body string) string {
@@ -98,13 +99,14 @@ projects:
 
 const withDefaults = `
 projects_dir: /srv/projects
-changelog_cmds:
-  - "git-cliff > CHANGELOG-cliff.md"
-deps_cmds:
-  uv:
-    - "uv sync"
-  go:
-    - "make deps.update.internal"
+cmds:
+  changelog:
+    - "git-cliff > CHANGELOG-cliff.md"
+  deps:
+    uv:
+      - "uv sync"
+    go:
+      - "make deps.update.internal"
 defaults:
   dev_branch: main
   release_branch_prefix: rel/
@@ -195,9 +197,10 @@ func TestBuiltinDefaultsWhenNoDefaultsBlock(t *testing.T) {
 
 const withChangelog = `
 projects_dir: /srv/projects
-changelog_cmds:
-  - "git-cliff > CHANGELOG-cliff.md"
-  - "{rt} changelog gen > CHANGELOG-git.md"
+cmds:
+  changelog:
+    - "git-cliff > CHANGELOG-cliff.md"
+    - "{rt} changelog gen > CHANGELOG-git.md"
 changelog_env:
   GIT_CLIFF_CONFIG: ".dev-include/config/cliff.toml"
   GIT_CLIFF__CHANGELOG__HEADER: "# Changelog of {project}"
@@ -208,8 +211,9 @@ projects:
     git: git@example.com:inherits.git
   - name: overrides
     git: git@example.com:overrides.git
-    changelog_cmds:
-      - "make changelog"
+    cmds:
+      changelog:
+        - "make changelog"
     changelog_env:
       GIT_CLIFF_CONFIG: "cliff.toml"
 `
@@ -336,7 +340,7 @@ projects:
 projects_dir: /p
 projects:
   - {name: a, git: g, changelog: true}
-`, "no changelog_cmds"},
+`, "no cmds.changelog"},
 		{"unknown deps kind in defaults", `
 projects_dir: /p
 defaults:
@@ -361,13 +365,26 @@ projects_dir: /p
 projekts:
   - {name: a, git: g}
 `, "field"},
-		{"deps_check_cmds under a kind that does not exist", `
+		{"cmds.deps_check under a kind that does not exist", `
 projects_dir: /p
-deps_check_cmds:
-  cargo: ["cargo check"]
+cmds:
+  deps_check:
+    cargo: ["cargo check"]
 projects:
   - {name: a, git: g}
-`, "deps_check_cmds"},
+`, "cmds.deps_check"},
+		{"a pre-cmds key", `
+projects_dir: /p
+deps_cmds:
+  uv: ["uv sync"]
+projects:
+  - {name: a, git: g}
+`, "deps_cmds moved to cmds.deps"},
+		{"a pre-cmds key on a project", `
+projects_dir: /p
+projects:
+  - {name: a, git: g, changelog_cmds: ["make changelog"]}
+`, "project a: changelog_cmds moved to cmds.changelog"},
 	}
 	for _, c := range cases {
 		_, err := Load(write(t, c.body))
@@ -389,14 +406,15 @@ func TestDepsCommands(t *testing.T) {
 
 	cfg, err := Load(write(t, `
 projects_dir: /p
-deps_cmds:
-  uv:
-    - "uv sync"
-  go:
-    - "make deps.update.internal"
+cmds:
+  deps:
+    uv:
+      - "uv sync"
+    go:
+      - "make deps.update.internal"
 projects:
   - {name: py, git: g, deps: uv}
-  - {name: go, git: g, deps: go, deps_cmds: ["go mod tidy"]}
+  - {name: go, git: g, deps: go, cmds: {deps: ["go mod tidy"]}}
   - {name: plain, git: g}
 `))
 	if err != nil {
@@ -422,13 +440,14 @@ func TestUnknownDepsKindIsRejected(t *testing.T) {
 
 	_, err := Load(write(t, `
 projects_dir: /p
-deps_cmds:
-  uv:
-    - "uv sync"
+cmds:
+  deps:
+    uv:
+      - "uv sync"
 projects:
   - {name: a, git: g, deps: cargo}
 `))
-	if err == nil || !strings.Contains(err.Error(), "not in deps_cmds (defined: uv)") {
+	if err == nil || !strings.Contains(err.Error(), "not in cmds.deps (defined: uv)") {
 		t.Fatalf("err = %v", err)
 	}
 
@@ -436,7 +455,7 @@ projects:
 	if _, err := Load(write(t, `
 projects_dir: /p
 projects:
-  - {name: a, git: g, deps: cargo, deps_cmds: ["cargo update"]}
+  - {name: a, git: g, deps: cargo, cmds: {deps: ["cargo update"]}}
 `)); err != nil {
 		t.Errorf("a project that names its own commands should load: %v", err)
 	}
@@ -543,7 +562,7 @@ projects:
 	for _, body := range []string{
 		`rc_tag_message: "rc {version} of {product_version}"`,
 		`freeze_commit_message: "freeze {branch} for {product_version}"`,
-		"changelog_cmds: [\"echo {product_version} > v.txt\"]",
+		"cmds: {changelog: [\"echo {product_version} > v.txt\"]}",
 	} {
 		_, err := Load(write(t, "projects_dir: /p\n"+body+"\nprojects:\n  - {name: a, git: g, changelog: false}\n"))
 		if err == nil || !strings.Contains(err.Error(), "product_version is not set") {
@@ -720,5 +739,86 @@ func TestPagerCommand(t *testing.T) {
 
 	if got := cfg.PagerCommand(); got != "bat -p" {
 		t.Errorf("the config should win: %q", got)
+	}
+}
+
+// mr sits next to ci: a project setting with a default, where none is final
+// — it keeps the project out of merge requests even when a run asks for
+// them — and unset leaves the decision to --mr.
+func TestMRIsAProjectSettingWithDefaults(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(write(t, `
+projects_dir: /srv/projects
+defaults:
+  mr: always
+projects:
+  - name: api
+    git: git@example.com:api.git
+  - name: ui
+    git: git@example.com:ui.git
+    mr: none
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := cfg.Projects[0].MR; got != MRAlways {
+		t.Errorf("api should take the default, got %q", got)
+	}
+
+	if got := cfg.Projects[1].MR; got != MRNone {
+		t.Errorf("ui set its own, got %q", got)
+	}
+
+	if cfg.MergeRequest.Branch != "rt/{command}/{branch}/{date}" || cfg.MergeRequest.Title != "{message}" {
+		t.Errorf("built-in templates missing: %+v", cfg.MergeRequest)
+	}
+
+	if cfg.MergeRequest.Wait != MRWaitDependents || cfg.MergeRequest.WaitFor() != 60*time.Minute ||
+		cfg.MergeRequest.Settle() != 0 {
+		t.Errorf("built-in wait settings missing: %+v", cfg.MergeRequest)
+	}
+
+	_, err = Load(write(t, "merge_request:\n  wait: later\n"+minimal))
+	if err == nil || !strings.Contains(err.Error(), "wait: \"later\" is not one of dependents, always, none") {
+		t.Errorf("a bad wait value must be refused: %v", err)
+	}
+
+	// Unset is a state of its own, not none.
+	plain, err := Load(write(t, minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := plain.Projects[0].MR; got != "" {
+		t.Errorf("without a default mr stays unset, got %q", got)
+	}
+
+	_, err = Load(write(t, minimal+"    mr: sometimes\n"))
+	if err == nil || !strings.Contains(err.Error(), "mr: \"sometimes\" is not one of always, none") {
+		t.Errorf("a bad mr value must be refused: %v", err)
+	}
+}
+
+// Hooks attach to the three events rt has; anything else is a typo found
+// at load time.
+func TestHooksAreValidated(t *testing.T) {
+	t.Parallel()
+
+	hooks := "hooks:\n  ask:\n    - \"notify-send rt \\\"$RT_MESSAGE\\\"\"\n  done:\n    - \"true\"\n"
+
+	cfg, err := Load(write(t, hooks+minimal))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(cfg.Hooks[HookAsk]) != 1 || len(cfg.Hooks[HookDone]) != 1 {
+		t.Errorf("hooks = %v", cfg.Hooks)
+	}
+
+	_, err = Load(write(t, "hooks:\n  finished:\n    - \"true\"\n"+minimal))
+	if err == nil || !strings.Contains(err.Error(), "hooks: \"finished\" is not one of ask, wait, done") {
+		t.Errorf("an unknown event must be refused: %v", err)
 	}
 }

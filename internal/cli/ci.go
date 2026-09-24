@@ -84,11 +84,16 @@ func watchCI(rctx *run.Ctx, r gitx.Repo, p *config.Project, sha, ref, msg string
 	appearBy := time.Now().Add(ciAppearWait)
 	last := ciPipeline{State: ciMissing}
 	retried := 0
+	announced := false
 
 	for {
 		pipe, err := ciQuery(r, p.CI, sha, ref)
 		if err != nil {
 			return fmt.Errorf("%s pipeline for %s: %w", p.CI, ref, err)
+		}
+
+		if !announced {
+			announced = announceWait(p, pipe, ref)
 		}
 
 		// A failure is only final once the retries are spent. The retry
@@ -97,17 +102,13 @@ func watchCI(rctx *run.Ctx, r gitx.Repo, p *config.Project, sha, ref, msg string
 		// since the jobs start over.
 		if pipe.State == ciFailed && retried < rctx.Cfg.CIRetryLimit() {
 			retried++
-			fmt.Printf("    %s %s failed, retrying (%d/%d): %s\n",
-				p.CI, pipe.Label, retried, rctx.Cfg.CIRetryLimit(), run.Dim(pipe.URL))
 
-			if err := ciRetry(r, p.CI, pipe); err != nil {
-				return fmt.Errorf("retry %s %s: %w", p.CI, pipe.Label, err)
+			if err := retryPipeline(rctx, r, p, pipe, retried); err != nil {
+				return err
 			}
 
 			last = ciPipeline{State: ciMissing}
 			deadline = time.Now().Add(rctx.Cfg.CIWait())
-
-			time.Sleep(rctx.Cfg.CIPoll())
 
 			continue
 		}
@@ -116,24 +117,69 @@ func watchCI(rctx *run.Ctx, r gitx.Repo, p *config.Project, sha, ref, msg string
 			return err
 		}
 
-		now := time.Now()
-
-		// A pipeline that never appeared has no label or URL to report, so
-		// the deadline never speaks for it — the appear window does, even
-		// when a short ci_wait_minutes technically expires first.
-		switch {
-		case pipe.State == ciMissing && (now.After(appearBy) || now.After(deadline)):
-			fmt.Printf("    %s no %s pipeline appeared for %s in %s\n",
-				run.Warn(), p.CI, ref, ciAppearWait)
-
-			return nil
-		case pipe.State != ciMissing && now.After(deadline):
-			return fmt.Errorf("%s %s %w %s: %s",
-				p.CI, pipe.Label, errStillRunning, rctx.Cfg.CIWait(), pipe.URL)
+		if over, err := watchExpired(rctx, p, pipe, ref, appearBy, deadline); over {
+			return err
 		}
 
 		time.Sleep(rctx.Cfg.CIPoll())
 	}
+}
+
+// watchExpired says whether the watch has run out of time, and how: a
+// pipeline that never appeared has no label or URL to report, so the
+// deadline never speaks for it — the appear window does, even when a short
+// ci_wait_minutes technically expires first — and that is a warning, not an
+// error; a pipeline still running at the deadline is an error.
+func watchExpired(
+	rctx *run.Ctx,
+	p *config.Project,
+	pipe ciPipeline,
+	ref string,
+	appearBy, deadline time.Time,
+) (bool, error) {
+	now := time.Now()
+
+	switch {
+	case pipe.State == ciMissing && (now.After(appearBy) || now.After(deadline)):
+		fmt.Printf("    %s no %s pipeline appeared for %s in %s\n",
+			run.Warn(), p.CI, ref, ciAppearWait)
+
+		return true, nil
+	case pipe.State != ciMissing && now.After(deadline):
+		return true, fmt.Errorf("%s %s %w %s: %s",
+			p.CI, pipe.Label, errStillRunning, rctx.Cfg.CIWait(), pipe.URL)
+	default:
+		return false, nil
+	}
+}
+
+// retryPipeline restarts the failed jobs and gives them a moment to start.
+func retryPipeline(rctx *run.Ctx, r gitx.Repo, p *config.Project, pipe ciPipeline, attempt int) error {
+	fmt.Printf("    %s %s failed, retrying (%d/%d): %s\n",
+		p.CI, pipe.Label, attempt, rctx.Cfg.CIRetryLimit(), run.Dim(pipe.URL))
+
+	if err := ciRetry(r, p.CI, pipe); err != nil {
+		return fmt.Errorf("retry %s %s: %w", p.CI, pipe.Label, err)
+	}
+
+	time.Sleep(rctx.Cfg.CIPoll())
+
+	return nil
+}
+
+// announceWait fires the wait hook once there is a running pipeline to wait
+// for, and says whether it did.
+func announceWait(p *config.Project, pipe ciPipeline, ref string) bool {
+	if pipe.State != ciRunning {
+		return false
+	}
+
+	run.Fire(run.EventWait, map[string]string{
+		run.EnvMessage: fmt.Sprintf("watching %s %s for %s", p.CI, pipe.Label, ref),
+		run.EnvURL:     pipe.URL,
+	})
+
+	return true
 }
 
 // ciReport prints what changed and says whether the watch is over. The

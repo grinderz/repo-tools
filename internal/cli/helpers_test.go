@@ -141,7 +141,14 @@ func TestPlanLinesMentionTheReview(t *testing.T) {
 	p := &config.Project{Name: "api", CI: config.CINone}
 	shown := &run.Ctx{Cfg: &config.Config{}}
 
-	lines := commitPlanLines(shown, p, "release-1.0", "files changed", "ci/AB-0000: update changelog")
+	lines := commitPlanLines(
+		shown,
+		p,
+		cmdChangelogUpdate,
+		"release-1.0",
+		"files changed",
+		"ci/AB-0000: update changelog",
+	)
 	if !strings.Contains(lines[0], "diff shown first") {
 		t.Errorf("got %q", lines[0])
 	}
@@ -157,7 +164,8 @@ func TestPlanLinesMentionTheReview(t *testing.T) {
 	off := false
 	quiet := &run.Ctx{Cfg: &config.Config{Diff: &off}}
 
-	if got := commitPlanLines(quiet, p, "release-1.0", "files changed", "msg")[0]; strings.Contains(got, "diff") {
+	got := commitPlanLines(quiet, p, cmdChangelogUpdate, "release-1.0", "files changed", "msg")[0]
+	if strings.Contains(got, "diff") {
 		t.Errorf("with the review off the line should not mention it: %q", got)
 	}
 
@@ -291,8 +299,10 @@ func TestChangelogCommandsAndEnvExpansion(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{
-		ChangelogCmds: []string{"{rt} changelog gen --header '# CHANGELOG of {project}' > out.md"},
-		ChangelogEnv:  map[string]string{"GIT_CLIFF__CHANGELOG__HEADER": "# Changelog of {project} on {branch}"},
+		Cmds: config.Cmds{
+			Changelog: []string{"{rt} changelog gen --header '# CHANGELOG of {project}' > out.md"},
+		},
+		ChangelogEnv: map[string]string{"GIT_CLIFF__CHANGELOG__HEADER": "# Changelog of {project} on {branch}"},
 	}
 	rctx := &run.Ctx{Cfg: cfg}
 	project := &config.Project{Name: "api"}

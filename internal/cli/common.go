@@ -30,6 +30,9 @@ const (
 	varProject        = "project"
 	varRt             = "rt"
 	varTask           = "task"
+	varCommand        = "command" // the committing command, in merge request branch names
+	varDate           = "date"    // today, YYYY-MM-DD, in merge request branch names
+	varMessage        = "message" // the commit subject, in merge request titles
 )
 
 // Lengths used when abbreviating hashes for humans.
@@ -173,13 +176,23 @@ func planHash(short string) string { return run.Yellow(short) }
 // commitPlanLines describe the commit step: what would be pushed where, and
 // with which message — the message is as much a decision as the diff, and
 // waiting for the prompt to see it is too late in a dry run.
-func commitPlanLines(rctx *run.Ctx, p *config.Project, branch, condition, msg string) []string {
+func commitPlanLines(rctx *run.Ctx, p *config.Project, command, branch, condition, msg string) []string {
 	line := fmt.Sprintf("commit+push to %s if %s", planRef("origin/"+branch), condition)
+
+	m := planMergeRequest(rctx, p, command, branch, msg)
+	if m != nil {
+		line = m.plan() + " if " + condition
+	}
+
 	if rctx.ShowDiff() {
 		line += " (diff shown first)"
 	}
 
 	line += ciPlanSuffix(rctx, p)
+
+	if m != nil {
+		line += waitPlan(rctx, p)
+	}
 
 	return []string{line, "message: " + planMsg(fmt.Sprintf("%q", msg))}
 }
@@ -431,8 +444,9 @@ func pageText(rctx *run.Ctx, text string) bool {
 }
 
 // reviewStaged shows what is about to be committed and asks to go ahead.
-// It returns false when the operator declines.
-func reviewStaged(rctx *run.Ctx, r gitx.Repo, label, msg string) (bool, error) {
+// It returns false when the operator declines. With a merge request the
+// request is shown with the message and the question covers all of it.
+func reviewStaged(rctx *run.Ctx, r gitx.Repo, label, msg string, m *mergeRequest) (bool, error) {
 	if !rctx.ShowDiff() {
 		return true, nil
 	}
@@ -455,11 +469,19 @@ func reviewStaged(rctx *run.Ctx, r gitx.Repo, label, msg string) (bool, error) {
 	// diff it would otherwise have scrolled away by the time anyone answers.
 	fmt.Printf("\nmessage: %s\n", run.Green(msg))
 
+	question := "Commit and push?"
+
+	if m != nil {
+		fmt.Println(m.review())
+
+		question = m.question()
+	}
+
 	if !rctx.Interactive() {
 		return true, nil
 	}
 
-	return run.Confirm("Commit and push?")
+	return run.Confirm(question)
 }
 
 // withLeftovers names the work a failed run left behind. Without it the only

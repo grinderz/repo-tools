@@ -8,14 +8,37 @@
 
 projects_dir: ~/src/projects
 
-# Commands run by changelog update, in order, in each project directory. Each one
-# redirects to the file it generates; changelog update commits whatever changed.
-# {rt} expands to this binary, so changelog gen needs no rt on PATH.
-changelog_cmds:
-  - "git-cliff --repository ./ | sed 's/\\r$//' > CHANGELOG-cliff.md"
-  - "{rt} changelog gen --header '# CHANGELOG of {project}' > CHANGELOG-git.md"
+# The shell commands the projects run, in one block. A project may replace
+# any list with its own under its cmds.
+#
+# changelog: run by changelog update, in order, in each project directory.
+#   Each one redirects to the file it generates; changelog update commits
+#   whatever changed. {rt} expands to this binary, so changelog gen needs no
+#   rt on PATH.
+# deps: dependency commands, keyed by the kind a project names in its deps
+#   field. Nothing is built in: a project with deps: uv runs exactly what is
+#   listed here, in order, in its directory. deps freeze and deps submodules
+#   run them after moving the submodule pins; --no-deps skips them for one
+#   run.
+# deps_check: read-only freshness checks for rt deps check, per deps kind:
+#   each command exits non-zero when running the real deps commands would
+#   change something.
+cmds:
+  changelog:
+    - "git-cliff --repository ./ | sed 's/\\r$//' > CHANGELOG-cliff.md"
+    - "{rt} changelog gen --header '# CHANGELOG of {project}' > CHANGELOG-git.md"
+  deps:
+    uv:
+      - "uv sync"
+    go:
+      - "make deps.update.internal"
+  deps_check:
+    uv:
+      - "uv lock --check"
+    go:
+      - "go mod tidy -diff"
 
-# Environment for those commands. Values take the same placeholders.
+# Environment for the changelog commands. Values take the same placeholders.
 changelog_env:
   GIT_CLIFF_CONFIG: ".dev-include/config/cliff.toml"
   GIT_CLIFF__CHANGELOG__HEADER: "# Changelog of {project}\n\n"
@@ -23,25 +46,6 @@ changelog_env:
 # Check submodules out before generating, needed when the git-cliff config
 # lives in one of them. Default true.
 changelog_init_submodules: true
-
-# Dependency commands, keyed by the kind a project names in its deps field.
-# Nothing is built in: a project with deps: uv runs exactly what is listed
-# here, in order, in its directory. deps freeze and deps submodules run them
-# after moving the submodule pins; --no-deps skips them for one run.
-deps_cmds:
-  uv:
-    - "uv sync"
-  go:
-    - "make deps.update.internal"
-
-# Read-only freshness checks for rt deps check, per deps kind: each command
-# exits non-zero when running the real deps commands would change something.
-# A project can replace its kind's list with its own deps_check_cmds.
-deps_check_cmds:
-  uv:
-    - "uv lock --check"
-  go:
-    - "go mod tidy -diff"
 
 # Where a deps kind keeps the refs of its internal dependencies when those are
 # not submodules. A go project consumes its libraries through go.mod, and the
@@ -76,6 +80,34 @@ submodules_commit_message: "chore(deps): update submodules on {branch}"
 # the commit git rebase --submodules adds when a freshly pushed submodule
 # head still has to be pinned by hand
 rebase_pin_commit_message: "chore(deps): pin rebased submodule branches"
+
+# The merge requests a project with mr: always gets (see defaults below):
+# deps submodules, deps freeze and changelog update then commit to the branch
+# named here, push it, open the request into the target branch through
+# glab/gh (the project's ci) and watch its pipeline. Templates take {command}
+# (deps-submodules, deps-freeze, changelog-update), {date} (YYYY-MM-DD) and,
+# the title, {message}.
+# After the pipeline the command waits for the request to be merged before
+# the next project, which may pull this one in: dependents (only when a
+# project still to come depends on this one, as a submodule or a pinned
+# module), always, or none. wait_minutes bounds it; settle_seconds pauses
+# after the merge for what it sets in motion (a package build) to land.
+# description is the body, a template. The API applies none of the
+# repository's own templates (only the web form does), so an empty body stays
+# empty unless template names one: Default reads
+# .gitlab/merge_request_templates/Default.md from the target branch and
+# expands the placeholders. assignees and reviewers are usernames —
+# mr_assignees and mr_reviewers on a project replace them.
+merge_request:
+  branch: "rt/{command}/{branch}/{date}"
+  title: "{message}"
+  description: ""
+  template: ""
+  assignees: []
+  reviewers: []
+  wait: dependents
+  wait_minutes: 60
+  settle_seconds: 0
 
 # release notes headings; unset keeps the built-ins shown here.
 # notes_section_title additionally takes {tag} — the tag the section covers.
@@ -116,7 +148,7 @@ color: true
 # its release_branch when set, its dev branch otherwise. Default true.
 derive_submodules: true
 
-# Run the project's own commands (deps_cmds, changelog_cmds) through
+# Run the project's own commands (cmds.deps, cmds.changelog) through
 # "direnv exec" when the project has an .envrc, so its GOPROXY, GOPRIVATE or
 # index URLs apply. Default true; does nothing without direnv or .envrc.
 direnv: true
@@ -152,10 +184,28 @@ report:
 # the everyday routine; a release config would define the whole release
 # instead: repo sync, release branch, repo check, deps freeze, release rc,
 # changelog update.
+# Shell commands at rt's own events, for a notification when the terminal
+# needs a look: ask (a question is on screen), wait (a pipeline or a merge
+# request is being waited for), done (the invoked command is over, a flow
+# counts as one). The event comes in RT_EVENT, RT_COMMAND, RT_PROJECT,
+# RT_PROJECT_DIR, RT_MESSAGE, RT_STATUS (done: ok | failed | declined) and
+# RT_URL (wait). A failing hook is a warning; a dry run fires none.
+hooks:
+  ask:
+    - "notify-send rt \"$RT_MESSAGE\""
+  wait:
+    - "notify-send rt \"$RT_PROJECT: $RT_MESSAGE\""
+  done:
+    - "notify-send rt \"$RT_COMMAND: $RT_STATUS\""
+
+# A step may carry a command's flags, the way the shell would pass them.
 flows:
   daily:
     - "repo sync"
     - "repo check"
+  bump:
+    - "repo sync --checkout"
+    - "deps submodules --mr"
 
 # always:      ask before every command (default)
 # destructive: ask only before what commits, pushes or tags
@@ -170,8 +220,11 @@ defaults:
   dev_branch: develop
   changelog_branch: ""    # empty means dev_branch; "release" means release_branch
   release_branch_prefix: release-
-  deps: none              # a key of deps_cmds, or none
+  deps: none              # a key of cmds.deps, or none
   ci: none                # watch pipelines after pushes: gitlab (glab), github (gh), none
+  # commits as merge requests instead of pushes to the target branch: always,
+  # none (final, even under --mr), or unset — then only --mr turns it on
+  mr: none
   changelog: true
   deps_freeze: true
   release_tags: true      # release rc / release tag; on unless set to false
@@ -229,11 +282,12 @@ projects:
     dev_branch: main
     changelog_env:            # merged over the global map, key by key
       GIT_CLIFF_CONFIG: "cliff.toml"
-    changelog_cmds:           # replaces the global list outright
-      - "make changelog"
-    deps_cmds:                # replaces the commands of its deps kind
-      - "go mod tidy"
-      - "go mod vendor"
+    cmds:
+      changelog:              # replaces the global list outright
+        - "make changelog"
+      deps:                   # replaces the commands of its deps kind
+        - "go mod tidy"
+        - "go mod vendor"
     submodules:
       - path: .dev-include
         freeze_to: develop

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/grinderz/repo-tools/internal/config"
 	"github.com/grinderz/repo-tools/internal/run"
@@ -40,19 +41,19 @@ func newFlowCmd(rctx *run.Ctx, name string) *cobra.Command {
 				return nil
 			}
 
-			cmds, err := flowCommands(cmd.Root(), rctx, args[0])
+			steps, err := flowCommands(cmd.Root(), rctx, args[0])
 			if err != nil {
 				return err
 			}
 
-			printFlowPlan(args[0], args[1:], cmds)
+			printFlowPlan(args[0], args[1:], steps)
 
-			for i, step := range cmds {
+			for i, step := range steps {
 				fmt.Printf("\n%s %s (%d/%d)\n",
-					run.Marker(), run.Bold(cmdLabel(step)), i+1, len(cmds))
+					run.Marker(), run.Bold(step.Label), i+1, len(steps))
 
-				if err := step.RunE(step, args[1:]); err != nil {
-					return fmt.Errorf("%s: %w", cmdLabel(step), err)
+				if err := runStep(cmd.Root(), rctx, step, args[1:]); err != nil {
+					return fmt.Errorf("%s: %w", step.Label, err)
 				}
 
 				if rctx.Aborted {
@@ -85,7 +86,7 @@ func listFlows(root *cobra.Command, rctx *run.Ctx) {
 
 			// Startup validation has already resolved every step; here only
 			// the disable list can still say no.
-			if target, err := resolveFlowStep(root, name, step); err == nil {
+			if target, _, err := resolveFlowStep(root, name, step); err == nil {
 				if checkDisabled(target, rctx.Cfg, rctx.ConfigPath) != nil {
 					line += "  " + run.Yellow("(disabled — this flow will refuse to start)")
 				}
@@ -98,7 +99,7 @@ func listFlows(root *cobra.Command, rctx *run.Ctx) {
 
 // printFlowPlan lists the whole sequence before the first command starts
 // asking questions, so what the flow is about to do is on the table up front.
-func printFlowPlan(name string, projects []string, cmds []*cobra.Command) {
+func printFlowPlan(name string, projects []string, steps []flowStep) {
 	scope := ""
 	if len(projects) > 0 {
 		scope = " (" + strings.Join(projects, ", ") + ")"
@@ -106,24 +107,98 @@ func printFlowPlan(name string, projects []string, cmds []*cobra.Command) {
 
 	fmt.Printf("%s %s\n", run.Marker(), run.Bold("flow "+name+" plan"+scope))
 
-	for i, c := range cmds {
-		fmt.Printf("  %d. %s\n", i+1, run.Bold(cmdLabel(c)))
+	for i, step := range steps {
+		fmt.Printf("  %d. %s\n", i+1, run.Bold(step.Label))
 	}
+}
+
+// flowStep is one resolved step: the command, the flags the step carries,
+// and the label the plan and the progress lines print.
+type flowStep struct {
+	Cmd   *cobra.Command
+	Flags []string
+	Label string
+}
+
+// runStep runs one step with its flags in effect and only there. A step's
+// flags are parsed right before it runs; the ones that are the root's — --mr,
+// --no-diff, --no-fetch — are derived into the context again, and put back
+// the way the command line had them once the step is over, so "deps
+// submodules --mr" does not turn the changelog step after it into a merge
+// request too. A command's own flags need no undoing: each command runs
+// once per flow.
+func runStep(root *cobra.Command, rctx *run.Ctx, step flowStep, projects []string) error {
+	saved := saveFlags(root.PersistentFlags())
+
+	if err := step.Cmd.ParseFlags(step.Flags); err != nil {
+		return fmt.Errorf("step flags: %w", err)
+	}
+
+	if err := rctx.ApplyFlags(); err != nil {
+		return err
+	}
+
+	runErr := step.Cmd.RunE(step.Cmd, projects)
+
+	if err := restoreFlags(root.PersistentFlags(), saved); err != nil {
+		return err
+	}
+
+	if err := rctx.ApplyFlags(); err != nil {
+		return err
+	}
+
+	return runErr //nolint:wrapcheck // the flow names the step around it
+}
+
+// savedFlag is one flag's value and changed mark, as the command line left it.
+type savedFlag struct {
+	Value   string
+	Changed bool
+}
+
+func saveFlags(fs *pflag.FlagSet) map[string]savedFlag {
+	saved := map[string]savedFlag{}
+
+	fs.VisitAll(func(f *pflag.Flag) {
+		saved[f.Name] = savedFlag{Value: f.Value.String(), Changed: f.Changed}
+	})
+
+	return saved
+}
+
+func restoreFlags(fs *pflag.FlagSet, saved map[string]savedFlag) error {
+	var err error
+
+	fs.VisitAll(func(f *pflag.Flag) {
+		was, ok := saved[f.Name]
+		if !ok || (f.Value.String() == was.Value && f.Changed == was.Changed) {
+			return
+		}
+
+		if setErr := f.Value.Set(was.Value); setErr != nil && err == nil {
+			err = fmt.Errorf("restore --%s: %w", f.Name, setErr)
+		}
+
+		f.Changed = was.Changed
+	})
+
+	return err
 }
 
 // flowCommands resolves a flow's steps against the real command tree, all of
 // them before any runs: a typo or a disabled command must stop the flow while
 // nothing has happened yet, not in the middle of a release.
-func flowCommands(root *cobra.Command, rctx *run.Ctx, name string) ([]*cobra.Command, error) {
-	steps, ok := rctx.Cfg.Flows[name]
+func flowCommands(root *cobra.Command, rctx *run.Ctx, name string) ([]flowStep, error) {
+	entries, ok := rctx.Cfg.Flows[name]
 	if !ok {
 		return nil, fmt.Errorf("flow %q %w%s", name, errUnknownFlow, knownFlows(rctx.Cfg))
 	}
 
-	cmds := make([]*cobra.Command, 0, len(steps))
+	steps := make([]flowStep, 0, len(entries))
 
-	for _, step := range steps {
-		target, err := resolveFlowStep(root, name, step)
+	for _, entry := range entries {
+		target, flags, err := resolveFlowStep(root, name, entry)
 		if err != nil {
 			return nil, err
 		}
@@ -132,10 +207,14 @@ func flowCommands(root *cobra.Command, rctx *run.Ctx, name string) ([]*cobra.Com
 			return nil, fmt.Errorf("flow %s: %w", name, err)
 		}
 
-		cmds = append(cmds, target)
+		steps = append(steps, flowStep{
+			Cmd:   target,
+			Flags: flags,
+			Label: strings.Join(append([]string{commandKey(target)}, flags...), " "),
+		})
 	}
 
-	return cmds, nil
+	return steps, nil
 }
 
 // flowBanned names the commands a flow cannot express or should never batch,
@@ -150,40 +229,75 @@ var flowBanned = map[string]string{
 	"changelog gen":   "it prints one repository's document and works outside the config",
 }
 
-// resolveFlowStep maps one flow entry onto the command tree. It is also what
-// every command runs over the whole flows block at startup, so a typo in a
-// flow is a config error found today, not on release day when the flow first
-// runs. The disable list is not checked here: it is enforced when the flow
-// actually runs, like everywhere else.
-func resolveFlowStep(root *cobra.Command, name, step string) (*cobra.Command, error) {
-	key := strings.Join(strings.Fields(step), " ")
+// resolveFlowStep maps one flow entry onto the command tree and returns the
+// command with the flags the entry carries after it, unparsed. It is also
+// what every command runs over the whole flows block at startup, so a typo
+// in a flow is a config error found today, not on release day when the flow
+// first runs. The disable list is not checked here: it is enforced when the
+// flow actually runs, like everywhere else.
+func resolveFlowStep(root *cobra.Command, name, step string) (*cobra.Command, []string, error) {
+	words, flags := splitStep(step)
+	key := strings.Join(words, " ")
 
-	target, _, err := root.Find(strings.Fields(step))
+	target, _, err := root.Find(words)
 	if err == nil && target.Name() == flowCmdName {
-		return nil, fmt.Errorf("flow %s: %w", name, errFlowInFlow)
+		return nil, nil, fmt.Errorf("flow %s: %w", name, errFlowInFlow)
 	}
 
 	if err != nil || commandKey(target) != key {
-		return nil, fmt.Errorf("flow %s: %q %w", name, step, errNotACommand)
+		return nil, nil, fmt.Errorf("flow %s: %q %w", name, step, errNotACommand)
 	}
 
 	if target.RunE == nil {
-		return nil, fmt.Errorf("flow %s: %q %w", name, step, errGroupStep)
+		return nil, nil, fmt.Errorf("flow %s: %q %w", name, step, errGroupStep)
 	}
 
 	if reason, banned := flowBanned[key]; banned {
-		return nil, fmt.Errorf("flow %s: %q %w: %s", name, step, errNotAFlowStep, reason)
+		return nil, nil, fmt.Errorf("flow %s: %q %w: %s", name, step, errNotAFlowStep, reason)
 	}
 
-	return target, nil
+	// A run-level flag has no meaning per step: the config and --skip are
+	// the run's, and a slice flag could not be undone after the step anyway.
+	for _, f := range flags {
+		if flag := strings.TrimLeft(f, "-"); flag == "config" || flag == "skip" || f == "-c" {
+			return nil, nil, fmt.Errorf("flow %s: %q: %s %w", name, step, f, errNotAStepFlag)
+		}
+	}
+
+	return target, flags, nil
 }
 
-// checkFlows resolves every step of every flow, for the startup validation.
-func checkFlows(root *cobra.Command, cfg *config.Config) error {
+// splitStep separates a flow entry into the command words and the flags
+// after them: "deps submodules --mr" is the command deps submodules with
+// --mr. Everything from the first dash-word on is a flag, values included.
+func splitStep(step string) ([]string, []string) {
+	fields := strings.Fields(step)
+
+	for i, f := range fields {
+		if strings.HasPrefix(f, "-") {
+			return fields[:i], fields[i:]
+		}
+	}
+
+	return fields, nil
+}
+
+// checkFlows resolves every step of every flow and parses its flags, for
+// the startup validation. The flags are parsed into a scratch command tree:
+// parsing marks flags as set, and a value from one flow must not linger on
+// the tree the actual command is about to run on.
+func checkFlows(cfg *config.Config) error {
+	root := NewRoot()
+
 	for _, name := range slices.Sorted(maps.Keys(cfg.Flows)) {
 		for _, step := range cfg.Flows[name] {
-			if _, err := resolveFlowStep(root, name, step); err != nil {
+			target, flags, err := resolveFlowStep(root, name, step)
+			if err != nil {
 				return err
+			}
+
+			if err := target.ParseFlags(flags); err != nil {
+				return fmt.Errorf("flow %s: %q: %w", name, step, err)
 			}
 		}
 	}

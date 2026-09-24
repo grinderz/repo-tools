@@ -93,7 +93,7 @@ func TestPinsCell(t *testing.T) {
 	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
 	git(t, f.parent, "update-ref", "refs/remotes/origin/release-1.0", "release-1.0")
 
-	text, _, drifted := pinsCell(testCtx(), p, r, "release-1.0", map[string]bool{})
+	text, _, drifted := pinsCell(ctxFor(p), p, r, "release-1.0", map[string]bool{})
 	if text != "ok" || drifted != nil {
 		t.Errorf("pin at head: %q %v", text, drifted)
 	}
@@ -104,7 +104,7 @@ func TestPinsCell(t *testing.T) {
 	commit(t, f.sub, "sub: second hotfix")
 	git(t, filepath.Join(f.parent, "sub"), "fetch", "--quiet", "origin")
 
-	text, _, drifted = pinsCell(testCtx(), p, r, "release-1.0", map[string]bool{})
+	text, _, drifted = pinsCell(ctxFor(p), p, r, "release-1.0", map[string]bool{})
 	if text != "drift(1)" || len(drifted) != 1 || !strings.Contains(drifted[0], "behind 1 commit(s)") {
 		t.Errorf("pin behind: %q %v", text, drifted)
 	}

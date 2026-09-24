@@ -12,12 +12,12 @@ import (
 // newDepsCheckCmd runs each deps kind's freshness checks — commands that exit
 // non-zero when the dependency files are not what the real commands would
 // write, like "go mod tidy -diff" or "uv lock --check". The checks come from
-// deps_check_cmds in the config; nothing about a language is built in.
+// cmds.deps_check in the config; nothing about a language is built in.
 func newDepsCheckCmd(rctx *run.Ctx, name string) *cobra.Command {
 	return &cobra.Command{
 		Use:   name + " [project...]",
 		Short: "Check that the dependency files are current",
-		Long: "Runs the deps kind's check commands from deps_check_cmds in each\n" +
+		Long: "Runs the deps kind's check commands from cmds.deps_check in each\n" +
 			"project's working copy, through direnv where there is an .envrc — the\n" +
 			"same way deps freeze runs the real commands. A check that exits\n" +
 			"non-zero marks the project stale, its output says why, and the run\n" +

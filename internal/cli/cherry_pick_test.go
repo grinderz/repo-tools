@@ -45,6 +45,16 @@ func testCtx() *run.Ctx {
 	return &run.Ctx{Cfg: &config.Config{Confirm: config.ConfirmNever}, FetchFlag: &offline}
 }
 
+// ctxFor is testCtx with p in the config, for the code that looks a project
+// up by url — the submodule scope is derived from the projects the config
+// knows, and a bare context knows none.
+func ctxFor(p *config.Project) *run.Ctx {
+	rctx := testCtx()
+	rctx.Cfg.Projects = []*config.Project{p}
+
+	return rctx
+}
+
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.CommandContext(t.Context(), "git", args...)

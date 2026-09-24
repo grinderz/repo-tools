@@ -36,7 +36,7 @@ func newSubmodulesCmd(rctx *run.Ctx, name string) *cobra.Command {
 		Short: "Update submodules to the head of the branch they track and push",
 		Long: "Runs git submodule update --remote in every selected project, moving\n" +
 			"each submodule to the head of the branch .gitmodules has it tracking,\n" +
-			"runs the project's deps_cmds, then commits and pushes. Unlike deps\n" +
+			"runs the project's deps commands, then commits and pushes. Unlike deps\n" +
 			"freeze it rewrites no branch names in .gitmodules: whatever a submodule\n" +
 			"already tracks is what it is moved along.\n\n" +
 			"Works on the dev branch unless --branch says otherwise. A submodule\n" +
@@ -96,7 +96,7 @@ func newSubmodulesCmd(rctx *run.Ctx, name string) *cobra.Command {
 		false,
 		"leave the new pins in the working tree instead of committing and pushing",
 	)
-	c.Flags().BoolVar(&opts.NoDeps, "no-deps", false, "skip the deps_cmds, only move the submodule pins")
+	c.Flags().BoolVar(&opts.NoDeps, "no-deps", false, "skip the deps commands, only move the submodule pins")
 	c.Flags().BoolVar(&opts.AllowDirty, "allow-dirty", false,
 		"start on a working tree that already has changes, and commit them along (needs the diff review)")
 
@@ -122,7 +122,7 @@ func planSubmodules(rctx *run.Ctx, p *config.Project, opts submodulesOpts) (run.
 		branch = p.DevBranch
 	}
 
-	targets, untracked, err := trackedSubmodules(r, branchRef(r, branch), opts.Only)
+	targets, untracked, err := configuredSubmodules(rctx, r, p, branchRef(r, branch), opts.Only)
 	if err != nil {
 		st.Skip, st.Warn = true, err.Error()
 
@@ -154,7 +154,7 @@ func planSubmodules(rctx *run.Ctx, p *config.Project, opts submodulesOpts) (run.
 		st.Plan = append(st.Plan, "leave the new pins uncommitted")
 	} else {
 		st.Plan = append(st.Plan,
-			commitPlanLines(rctx, p, branch, "any pin moved", submodulesMessage(rctx, p, branch))...)
+			commitPlanLines(rctx, p, cmdDepsSubmodules, branch, "any pin moved", submodulesMessage(rctx, p, branch))...)
 	}
 
 	st.Exec = func() error { return updateSubmodules(rctx, p, branch, targets, opts) }
@@ -171,10 +171,42 @@ func noSubmodulesReason(only, untracked []string) string {
 	case len(untracked) > 0:
 		return fmt.Sprintf("no submodule tracks a branch in .gitmodules (%v), run deps freeze first", untracked)
 	case len(only) > 0:
-		return fmt.Sprintf("none of the submodules %v are in .gitmodules", only)
+		return fmt.Sprintf("none of the submodules %v are in .gitmodules and in the config", only)
 	default:
-		return "project has no submodules"
+		return "no submodule of this project is in the config"
 	}
+}
+
+// configuredSubmodules is trackedSubmodules narrowed to what the config has
+// this project follow: the submodules it lists, or — with no list — those
+// another configured project provides, the same set deps freeze works on. A
+// submodule outside that set is somebody else's repository: a dashboard
+// bundle or a vendored service the project merely carries, which an everyday
+// bump must not move. only narrows further.
+func configuredSubmodules(
+	rctx *run.Ctx,
+	r gitx.Repo,
+	p *config.Project,
+	ref string,
+	only []string,
+) ([]submoduleTarget, []string, error) {
+	scope, err := freezeList(rctx, r, p, ref)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	paths := make([]string, 0, len(scope))
+	for _, sm := range scope {
+		if len(only) == 0 || slices.Contains(only, sm.Path) {
+			paths = append(paths, sm.Path)
+		}
+	}
+
+	if len(paths) == 0 {
+		return nil, nil, nil
+	}
+
+	return trackedSubmodules(r, ref, paths)
 }
 
 // branchRef names the revision whose .gitmodules describes the run: what
@@ -276,7 +308,7 @@ func updateSubmodules(
 
 	msg := submodulesMessage(rctx, p, branch)
 
-	return commitAndPush(rctx, r, p, branch, msg, "submodules already at the head of their branches")
+	return commitAndPush(rctx, r, p, cmdDepsSubmodules, branch, msg, "submodules already at the head of their branches")
 }
 
 // submodulesMessage is the commit message deps submodules would use.

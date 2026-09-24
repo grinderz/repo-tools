@@ -51,6 +51,56 @@ func TestTrackedSubmodulesReadsTheBranchFromGitmodules(t *testing.T) {
 	}
 }
 
+// The config, not .gitmodules, says which submodules an everyday bump moves:
+// a repository the project merely carries — a dashboard bundle, a vendored
+// service — tracks a branch too, and must stay where it is. With no list the
+// scope is what other configured projects provide; a list narrows it further.
+func TestConfiguredSubmodulesFollowTheConfig(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	onDevelop(t, f)
+	r := gitx.Repo{Dir: f.parent}
+
+	// A second submodule that tracks a branch but belongs to no project.
+	foreign := filepath.Join(t.TempDir(), "foreign")
+	initRepo(t, foreign)
+	writeFile(t, foreign, "dash.json", "{}\n")
+	commit(t, foreign, "foreign: initial")
+	git(t, f.parent, "submodule", "add", "--quiet", "-b", "develop", foreign, "vendor/dash")
+	commit(t, f.parent, "parent: carry a foreign submodule")
+
+	all, _, err := trackedSubmodules(r, "", nil)
+	if err != nil || len(all) != 2 {
+		t.Fatalf(".gitmodules should list both: %+v %v", all, err)
+	}
+
+	p := f.project(t)
+
+	targets, untracked, err := configuredSubmodules(ctxFor(p), r, p, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(targets) != 1 || targets[0].Path != "sub" || len(untracked) != 0 {
+		t.Errorf("derived scope should be the configured project's submodule only: %+v %v", targets, untracked)
+	}
+
+	// --submodule outside the scope finds nothing rather than reaching past it.
+	targets, _, err = configuredSubmodules(ctxFor(p), r, p, "", []string{"vendor/dash"})
+	if err != nil || len(targets) != 0 {
+		t.Errorf("a path outside the config must not be a target: %+v %v", targets, err)
+	}
+
+	// An explicit list is the scope, whatever the urls say.
+	p.Submodules = []config.Submodule{{Path: "vendor/dash", FreezeTo: "develop"}}
+
+	targets, _, err = configuredSubmodules(ctxFor(p), r, p, "", nil)
+	if err != nil || len(targets) != 1 || targets[0].Path != "vendor/dash" {
+		t.Errorf("the listed submodule should be the scope: %+v %v", targets, err)
+	}
+}
+
 // A submodule with no branch in .gitmodules must be reported, not moved:
 // --remote would otherwise follow whatever the remote's default branch is.
 func TestTrackedSubmodulesSeparatesBranchlessOnes(t *testing.T) {
@@ -211,7 +261,7 @@ func TestNoSubmodulesReason(t *testing.T) {
 		untracked []string
 		want      string
 	}{
-		{"no submodules at all", nil, nil, "project has no submodules"},
+		{"no submodules at all", nil, nil, "no submodule of this project is in the config"},
 		{"none tracks a branch", nil, []string{"sub"}, "no submodule tracks a branch"},
 		{"filtered, none exists", []string{"nope"}, nil, "none of the submodules"},
 		{"filtered, branchless", []string{"sub"}, []string{"sub"}, "have no branch in .gitmodules"},
@@ -250,7 +300,9 @@ func TestPlanSubmodulesUsesTheDevBranchAndReportsTargets(t *testing.T) {
 	f := newFixture(t)
 	onDevelop(t, f)
 
-	step, matched, _ := planSubmodules(testCtx(), f.project(t), submodulesOpts{})
+	p := f.project(t)
+
+	step, matched, _ := planSubmodules(ctxFor(p), p, submodulesOpts{})
 	if step.Skip {
 		t.Fatalf("step was skipped: %s", step.Warn)
 	}
@@ -272,7 +324,7 @@ func TestPlanSubmodulesUsesTheDevBranchAndReportsTargets(t *testing.T) {
 		t.Errorf("the plan should end in a commit:\n%s", plan)
 	}
 
-	step, _, _ = planSubmodules(testCtx(), f.project(t), submodulesOpts{Branch: "release-1.0", NoCommit: true})
+	step, _, _ = planSubmodules(ctxFor(p), p, submodulesOpts{Branch: "release-1.0", NoCommit: true})
 	plan = strings.Join(step.Plan, "\n")
 
 	if !strings.Contains(plan, "checkout release-1.0") {
@@ -296,7 +348,7 @@ func TestUpdateSubmodulesRunsTheConfiguredDepsCmds(t *testing.T) {
 	p.Deps = "uv"
 
 	rctx := fetchingCtx()
-	rctx.Cfg.DepsCmds = map[string][]string{"uv": {"echo {project} > deps.txt"}}
+	rctx.Cfg.Cmds.Deps = map[string][]string{"uv": {"echo {project} > deps.txt"}}
 
 	targets := []submoduleTarget{{Path: "sub", Branch: "develop"}}
 
@@ -341,8 +393,8 @@ func TestPlanSubmodulesShowsTheDepsCmds(t *testing.T) {
 	p := f.project(t)
 	p.Deps = "uv"
 
-	rctx := testCtx()
-	rctx.Cfg.DepsCmds = map[string][]string{"uv": {"uv sync"}}
+	rctx := ctxFor(p)
+	rctx.Cfg.Cmds.Deps = map[string][]string{"uv": {"uv sync"}}
 
 	step, _, _ := planSubmodules(rctx, p, submodulesOpts{})
 	if !strings.Contains(strings.Join(step.Plan, "\n"), "deps (uv): uv sync") {
@@ -366,7 +418,9 @@ func TestPlanSubmodulesReadsGitmodulesOfTheTargetBranch(t *testing.T) {
 	publishOrigin(t, f.parent, "develop", "release-1.0")
 
 	// develop tracks develop, release-1.0 was frozen onto release-1.0.
-	step, _, _ := planSubmodules(testCtx(), f.project(t), submodulesOpts{Branch: "release-1.0"})
+	p := f.project(t)
+
+	step, _, _ := planSubmodules(ctxFor(p), p, submodulesOpts{Branch: "release-1.0"})
 	if step.Skip {
 		t.Fatalf("step was skipped: %s", step.Warn)
 	}

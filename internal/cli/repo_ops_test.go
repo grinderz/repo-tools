@@ -112,7 +112,7 @@ func TestReviewStagedPrintsAndPassesWhenNotInteractive(t *testing.T) {
 
 	msg := "build/AB-0000: update submodules on develop"
 
-	out := captureOutput(t, func() { ok, err = reviewStaged(testCtx(), r, "parent", msg) })
+	out := captureOutput(t, func() { ok, err = reviewStaged(testCtx(), r, "parent", msg, nil) })
 
 	if err != nil || !ok {
 		t.Fatalf("non-interactive review should pass: %v %v", ok, err)
@@ -146,7 +146,7 @@ func TestReviewStagedSilentWhenDisabled(t *testing.T) {
 
 	var ok bool
 
-	out := captureOutput(t, func() { ok, _ = reviewStaged(rctx, r, "parent", "msg") })
+	out := captureOutput(t, func() { ok, _ = reviewStaged(rctx, r, "parent", "msg", nil) })
 
 	if !ok || out != "" {
 		t.Errorf("--no-diff should print nothing and pass, got %q", out)
@@ -276,20 +276,20 @@ func TestCheckDeps(t *testing.T) {
 	p.Deps = "go"
 
 	rctx := testCtx()
-	rctx.Cfg.DepsCmds = map[string][]string{"go": {"definitely-not-a-real-program tidy"}}
+	rctx.Cfg.Cmds.Deps = map[string][]string{"go": {"definitely-not-a-real-program tidy"}}
 
 	issues := checkDeps(rctx, p)
 	if len(issues) != 1 || !strings.Contains(issues[0], "definitely-not-a-real-program is not in PATH") {
 		t.Errorf("got %v", issues)
 	}
 
-	rctx.Cfg.DepsCmds = map[string][]string{"go": {"git status"}}
+	rctx.Cfg.Cmds.Deps = map[string][]string{"go": {"git status"}}
 	if issues := checkDeps(rctx, p); len(issues) != 0 {
 		t.Errorf("a reachable program is fine: %v", issues)
 	}
 
 	// A shell construct is not a program name and must not be looked up.
-	rctx.Cfg.DepsCmds = map[string][]string{"go": {"FOO=1 git status"}}
+	rctx.Cfg.Cmds.Deps = map[string][]string{"go": {"FOO=1 git status"}}
 	if issues := checkDeps(rctx, p); len(issues) != 0 {
 		t.Errorf("an env assignment should be left alone: %v", issues)
 	}
@@ -333,7 +333,7 @@ func TestDepsCmds(t *testing.T) {
 	t.Parallel()
 
 	rctx := testCtx()
-	rctx.Cfg.DepsCmds = map[string][]string{
+	rctx.Cfg.Cmds.Deps = map[string][]string{
 		"uv": {"uv sync"},
 		"go": {"make deps.update.internal", "echo {project} on {branch}"},
 	}
@@ -347,7 +347,7 @@ func TestDepsCmds(t *testing.T) {
 		t.Errorf("placeholders were not expanded: %v", got)
 	}
 
-	own := &config.Project{Name: "api", Deps: "go", DepsCmds: []string{"go mod tidy"}}
+	own := &config.Project{Name: "api", Deps: "go", Cmds: config.ProjectCmds{Deps: []string{"go mod tidy"}}}
 	if got := depsCmds(rctx, own, "develop"); len(got) != 1 || got[0] != "go mod tidy" {
 		t.Errorf("a project list should replace the kind's: %v", got)
 	}
@@ -367,7 +367,7 @@ func TestFreezeDepsRunsTheConfiguredDepsCmds(t *testing.T) {
 	p.Submodules = []config.Submodule{{Path: "sub", FreezeTo: "release-1.0"}}
 
 	rctx := testCtx()
-	rctx.Cfg.DepsCmds = map[string][]string{"uv": {"echo {branch} > deps.txt"}}
+	rctx.Cfg.Cmds.Deps = map[string][]string{"uv": {"echo {branch} > deps.txt"}}
 	rctx.Cfg.FreezeCommitMessage = "chore(deps): freeze {branch}"
 
 	git(t, f.parent, "checkout", "--quiet", "release-1.0")
@@ -402,7 +402,7 @@ func TestPlanFreezeDepsHonoursNoDeps(t *testing.T) {
 	p.DepsFreeze = &depsFreeze
 
 	rctx := testCtx()
-	rctx.Cfg.DepsCmds = map[string][]string{"uv": {"uv sync"}}
+	rctx.Cfg.Cmds.Deps = map[string][]string{"uv": {"uv sync"}}
 
 	git(t, f.parent, "checkout", "--quiet", "release-1.0")
 

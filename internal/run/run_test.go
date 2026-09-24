@@ -2,6 +2,8 @@ package run
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -411,5 +413,73 @@ func TestGateWithNothingToDo(t *testing.T) {
 	if _, err := c.Gate("changelog update", LocalMutate,
 		[]Step{{Project: c.Cfg.Projects[0], Skip: true}, runnableStep(c)}); err != nil {
 		t.Errorf("a partly skipped plan is fine: %v", err)
+	}
+}
+
+// A hook sees the event and the run in RT_* variables, a failing hook is a
+// warning and not an error, and a dry run fires nothing.
+//
+//nolint:paralleltest // installs the process-wide hooks and captures stderr
+func TestHooksFireWithTheRunInTheEnvironment(t *testing.T) {
+	log := filepath.Join(t.TempDir(), "hooks.log")
+
+	SetHooks(map[string][]string{
+		EventAsk: {`echo "$RT_EVENT|$RT_COMMAND|$RT_PROJECT|$RT_MESSAGE" >> "` + log + `"`},
+	}, "deps submodules api", false)
+
+	defer SetHooks(nil, "", false)
+
+	setProject("api", "/srv/api")
+	Fire(EventAsk, map[string]string{EnvMessage: "Commit and push?"})
+	setProject("", "")
+
+	got, err := os.ReadFile(log)
+	if err != nil || strings.TrimSpace(string(got)) != "ask|deps submodules api|api|Commit and push?" {
+		t.Errorf("hook log = %q, %v", got, err)
+	}
+
+	// An event without hooks, and a dry run, run nothing.
+	Fire(EventDone, nil)
+
+	SetHooks(map[string][]string{EventAsk: {"echo dry >> " + log}}, "x", true)
+	Fire(EventAsk, nil)
+
+	if got, _ = os.ReadFile(log); strings.Contains(string(got), "dry") || strings.Count(string(got), "\n") != 1 {
+		t.Errorf("only the one hook should have run: %q", got)
+	}
+
+	// A broken hook is reported and swallowed.
+	SetHooks(map[string][]string{EventDone: {"exit 3"}}, "x", false)
+
+	stderr := os.Stderr
+
+	pipeR, pipeW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	os.Stderr = pipeW
+
+	Fire(EventDone, nil)
+
+	os.Stderr = stderr
+
+	_ = pipeW.Close()
+
+	warning := make([]byte, 256)
+	n, _ := pipeR.Read(warning)
+
+	if !strings.Contains(string(warning[:n]), "WARNING: hook done: exit 3: hook: exit status 3") {
+		t.Errorf("the failure should be a warning: %q", warning[:n])
+	}
+}
+
+// The question reaches the hook as plain text: no colour codes, no prompt
+// punctuation.
+func TestPlainTextStripsThePrompt(t *testing.T) {
+	t.Parallel()
+
+	if got := plainText("\x1b[1mProceed?\x1b[0m\x1b[2m [y/N]\x1b[0m: "); got != "Proceed? [y/N]" {
+		t.Errorf("got %q", got)
 	}
 }

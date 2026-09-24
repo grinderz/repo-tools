@@ -64,6 +64,11 @@ var (
 	errDeclinedPush    = errors.New("declined pushing")
 	errPinUnknown      = errors.New("is unknown to the remote")
 	errPinOffBranch    = errors.New("does not contain commit")
+	errNoMRTool        = errors.New("cannot open a merge request")
+	errNotAStepFlag    = errors.New("is the run's, not a step's")
+	errMRClosed        = errors.New("merge request was closed without being merged")
+	errNoMRTemplate    = errors.New("merge request template not found")
+	errMRNotMerged     = errors.New("merge request is still not merged")
 )
 
 // reasonError carries a reason that is already a sentence for the operator,

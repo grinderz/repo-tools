@@ -16,9 +16,10 @@ func pinsCtx(t *testing.T, f fixture) (*run.Ctx, *config.Project) {
 	t.Helper()
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	body := "deps_cmds:\n" +
-		"  go:\n" +
-		"    - \"make deps.update.internal\"\n" +
+	body := "cmds:\n" +
+		"  deps:\n" +
+		"    go:\n" +
+		"      - \"make deps.update.internal\"\n" +
 		"deps_pins:\n" +
 		"  go:\n" +
 		"    file: Makefile\n" +

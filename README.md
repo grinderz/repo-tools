@@ -53,32 +53,48 @@ pager: "less -R"              # reviews on a terminal; "" prints instead
 diff_lines: 200               # cap when printing without a pager; 0 for all
 direnv: true                  # run project commands through direnv when .envrc exists
 
-changelog_cmds:               # run in order, see changelog update below
-  - "git-cliff --repository ./ | sed 's/\r$//' > CHANGELOG-cliff.md"
-  - "{rt} changelog gen --header '# CHANGELOG of {project}' > CHANGELOG-git.md"
+cmds:                         # the shell commands the projects run
+  changelog:                  # in order, see changelog update below
+    - "git-cliff --repository ./ | sed 's/\r$//' > CHANGELOG-cliff.md"
+    - "{rt} changelog gen --header '# CHANGELOG of {project}' > CHANGELOG-git.md"
+  deps:                       # dependency commands, keyed by deps kind
+    uv:
+      - "uv sync"
+    go:
+      - "make deps.update.internal"
+  deps_check:                 # freshness checks for rt deps check
+    uv:
+      - "uv lock --check"
+    go:
+      - "go mod tidy -diff"
 changelog_env:
   GIT_CLIFF_CONFIG: ".dev-include/config/cliff.toml"
   GIT_CLIFF__CHANGELOG__HEADER: "# Changelog of {project}\n\n"
-
-deps_cmds:                    # dependency commands, keyed by deps kind
-  uv:
-    - "uv sync"
-  go:
-    - "make deps.update.internal"
 
 deps_pins:                    # internal refs that are not submodules
   go:
     file: Makefile
     var: GO_DEPS_UPDATE_INTERNAL
 
-deps_check_cmds:              # freshness checks for rt deps check
-  uv:
-    - "uv lock --check"
-  go:
-    - "go mod tidy -diff"
-
 disable:                      # commands this config must not run
   - "deps freeze"
+
+merge_request:                # the MRs mr: always opens, see below
+  branch: "rt/{command}/{branch}/{date}"
+  title: "{message}"
+  description: ""             # body template; empty leaves it to template, or empty
+  template: ""                # a repository MR template to use as the body, e.g. Default
+  assignees: []               # usernames; mr_assignees on a project overrides
+  reviewers: []               # same, mr_reviewers
+  wait: dependents            # wait for the merge: dependents | always | none
+  wait_minutes: 60
+  settle_seconds: 0           # and this much longer after the merge
+
+hooks:                        # shell commands at rt's own events, see below
+  ask:
+    - "notify-send rt \"$RT_MESSAGE\""
+  done:
+    - "notify-send rt \"$RT_COMMAND: $RT_STATUS\""
 
 flows:                        # named command sequences for rt flow <name>
   release:
@@ -88,12 +104,16 @@ flows:                        # named command sequences for rt flow <name>
     - "deps freeze"
     - "release rc"
     - "changelog update"
+  bump:                       # a step may carry flags, as on the command line
+    - "repo sync --checkout"
+    - "deps submodules --mr"
 
 defaults:                     # per-project settings, see below
   dev_branch: develop
   release_branch_prefix: release-
-  deps: none                  # a key of deps_cmds, or none
+  deps: none                  # a key of cmds.deps, or none
   ci: none                    # watch pipelines after pushes: gitlab | github | none
+  mr: none                    # commits as merge requests: always | none | unset (only under --mr)
   changelog: true
   deps_freeze: true
   release_tags: true          # rc and final tags; on unless set to false
@@ -122,11 +142,15 @@ not a string. The error says so.
 | `freeze_commit_message` | ✓ | ✓ | ✓ | ✓ | | | |
 | `submodules_commit_message` | ✓ | ✓ | ✓ | ✓ | | | |
 | `rebase_pin_commit_message` | ✓ | ✓ | ✓ | ✓ | | | |
+| `merge_request.branch`, `.title`, `.description` | ✓ | ✓ | ✓ | ✓ | | | |
 | `notes_header` | | | | ✓ | | | |
 | `notes_section_title` | ✓ | ✓ | ✓ | ✓ | | | |
-| `changelog_cmds`, `changelog_env` | ✓ | ✓ | ✓ | ✓ | | | ✓ |
+| `cmds.changelog`, `changelog_env` | ✓ | ✓ | ✓ | ✓ | | | ✓ |
 | `repo exec` command | ✓ | ✓ | ✓ | ✓ | | | ✓ |
 
+The merge request templates also take `{command}` (the committing command,
+dashes for spaces: `deps-submodules`), `{date}` (today, `YYYY-MM-DD`) and,
+the title and the description, `{message}` (the commit subject).
 `{branch}` is the branch being committed to or tagged. `{version}` is the
 computed tag itself — `1.26.0-rc.2`, not the `X.Y` of the branch — which is why
 it exists only where a tag is being made; a commit is made on a branch and has
@@ -158,15 +182,15 @@ placeholder still in it.
 `set -o pipefail` where the shell supports it: `git-cliff … | sed … > file` ends
 in `sed`, so without it a missing generator exits 0 and leaves an empty file
 behind, committed as though it were a changelog. `rt repo check` looks the other
-way at the same problem — it reports the programs of `deps_cmds` and
-`changelog_cmds` that are not on `PATH`, every stage of a pipeline included.
+way at the same problem — it reports the programs of `cmds.deps` and
+`cmds.changelog` that are not on `PATH`, every stage of a pipeline included.
 
-**Dependency commands.** Nothing about a language is built in. `deps_cmds` maps
+**Dependency commands.** Nothing about a language is built in. `cmds.deps` maps
 a kind name to the commands to run, and a project picks one with `deps:`; the
 kinds are whatever the config defines, so `cargo` or `npm` needs no code change.
-A project can replace the list outright with its own `deps_cmds`, and
+A project can replace the list outright with its own `cmds.deps`, and
 `deps: none` (the built-in default) runs nothing. A `deps:` value that no
-`deps_cmds` entry defines is a config error, not a silent no-op. The commands
+`cmds.deps` entry defines is a config error, not a silent no-op. The commands
 run in the project directory, in order, with the same `{project}` and `{branch}`
 placeholders; `rt deps freeze` and `rt deps submodules` run them after moving
 the submodule pins, and `--no-deps` skips them for one run.
@@ -175,7 +199,7 @@ the submodule pins, and `--no-deps` skips them for one run.
 libraries through `go.mod`, and the refs they are resolved from live in a make
 variable — `make deps.update.internal` walks `GO_DEPS_UPDATE_INTERNAL`, a list
 of `module@ref`. `deps_pins` says where such a list is, keyed by deps kind the
-same way `deps_cmds` is, and `rt deps freeze` moves every ref whose module is
+same way `cmds.deps` is, and `rt deps freeze` moves every ref whose module is
 another project in this config onto that project's branch before running the
 deps commands. Without that the commands would resolve dev heads and write
 their pseudo-versions into `go.mod`, which is the opposite of a freeze. The
@@ -200,7 +224,9 @@ command names, and `rt flow <name> [project...]` runs them in order over the
 same projects — the release walkthrough below as one command. The sequence is
 printed first, then every command behaves exactly as if typed by hand: it
 plans, asks and executes on its own, with the same flags (`--dry-run` shows
-every plan and executes nothing). The first failure and the first declined
+every plan and executes nothing). A step may carry a command's own flags —
+`"deps submodules --mr"`, `"repo sync --checkout"` — which reach it the way
+the shell would pass them; an unknown flag is a config error at startup. The first failure and the first declined
 plan stop the flow — the commands after a refused release branch would act on
 the release that was just refused. Every step is resolved before any runs —
 and the whole `flows:` block is resolved on every rt start, like `disable` —
@@ -213,6 +239,68 @@ out), `repo exec` (the command after `--` cannot be written in a step) and
 `changelog gen` (prints one repository's document, works outside the
 config). `rt flow` without a name lists the flows the config defines, steps
 and all, marking any step the disable list would block.
+
+**A protected dev branch takes its commits as merge requests.** `mr` sits
+next to `ci`, per project or in `defaults`: with `mr: always` (or `--mr` for
+one run, for the projects that leave `mr` unset) the committing commands —
+`deps submodules`, `deps freeze`, `changelog update` — put the commit on a
+branch of their own instead of pushing to the target branch, push it, open
+the request into the target through `glab` or `gh` (so the project needs
+`ci: gitlab` or `ci: github`), and watch the pipeline the request starts.
+`mr: none` is final: a project whose dev branch takes pushes, or whose CI
+runs no request pipelines, stays out even under `--mr`. The branch comes from
+the `merge_request.branch` template, `rt/{command}/{branch}/{date}` by
+default — `rt/deps-submodules/develop/2026-09-23` — so two commands run on
+the same day get branches of their own; the title from `merge_request.title`,
+the commit subject by default; `merge_request.description` is the body.
+The web form fills an empty body from the repository's template and the API
+does not, so a body left empty stays empty unless `merge_request.template`
+names one — `Default` reads `.gitlab/merge_request_templates/Default.md`
+(`.github/PULL_REQUEST_TEMPLATE/Default.md` for github) from the target
+branch, expands the placeholders in it and sends it as the body; `repo check`
+reports a named template the branch lacks. Off by default, since a template
+usually mentions people. And
+`merge_request.assignees` / `.reviewers` name who gets it (`mr_assignees` /
+`mr_reviewers` on a project replace the lists). A rerun on the same day
+rewrites the branch with one
+fresh commit and updates the request already open for it rather than opening
+a second one. The diff review shows the request with the message and asks
+once, `Commit, push and open MR into develop?`; a decline leaves the changes
+staged as usual. Afterwards the working copy is back on the target branch,
+submodules on its pins, and the local branch is what `repo prune` deletes once
+the request is merged. `--no-mr` pushes directly for one run where the config
+says `always`; `repo check` reports a project that has the mode on but no CLI
+to open a request with.
+
+A library's request is not the end of its step: the projects after it in the
+run pull its dev branch, and their bump only sees the change once the request
+is merged. So after the pipeline the command waits for the merge — `waiting
+for <url> to be merged (needed by api, worker)` — and goes on to the next
+project when it lands; the operator merges in the browser, rt notices.
+`merge_request.wait` says when: `dependents` (the default) only when a project
+still to come in the run depends on this one — carries its url in
+`.gitmodules` on the target branch, or lists its module in the `deps_pins`
+variable — `always`, or `none`. A request closed without a merge fails the
+step, and so does `wait_minutes` (60 by default) running out.
+`settle_seconds` adds a pause after the merge for what the merge sets in
+motion — a package build, a registry — to land before the next project pulls
+it. The plan says all of it: `then wait for the MR to be merged (needed by
+api) and 30s more`.
+
+**A run can call the operator back.** A run is mostly waiting — for an
+answer, for a pipeline, for a merge request — and `hooks` maps rt's own
+events to shell commands, so a desktop notification says when the terminal
+needs a look: `ask` fires before every question (`Proceed?`, `Commit and
+push?`, the commit picker, a retry), `wait` when there is something outside
+to wait for (a pipeline, once it is running; a merge request, when the wait
+for the merge starts), `done` once when the invoked command is over — a
+flow counts as one. The hook runs through `sh` in rt's own directory, with
+the event in `RT_EVENT`, the invoked command in `RT_COMMAND`, the project a
+step is working on in `RT_PROJECT` / `RT_PROJECT_DIR`, the question, the
+thing waited for or the error in `RT_MESSAGE`, `RT_STATUS` (`ok`, `failed`,
+`declined`) for `done` and `RT_URL` for `wait`. A hook is a courtesy, not a
+gate: its failure is a warning, nothing reads its output, and a dry run
+fires none. `repo check` verifies the hooks' programs are on `PATH`.
 
 **A push can be watched to the end of its pipeline.** A project with
 `ci: gitlab` or `ci: github` gets the pipeline of every pushed commit and tag
@@ -513,7 +601,7 @@ Commands are grouped by what they act on:
 | `rt repo report` | prints a markdown table of the projects, columns from the config |
 | `rt repo prune` | deletes local branches that are safe to lose: gone upstreams, stale release leftovers |
 | `rt repo exec` | runs one shell command in every project, through direnv |
-| `rt changelog update` | runs `changelog_cmds`, commits and pushes if files changed |
+| `rt changelog update` | runs `cmds.changelog`, commits and pushes if files changed |
 | `rt changelog gen` | prints the plain git-log changelog of one repository |
 | `rt release branch` | creates `release-X.Y` from the dev branch; an existing branch is a warning, a local leftover of a failed push is reused |
 | `rt release rc` | tags `X.Y.Z-rc.N` on the release branch and pushes; a head already tagged is a skip |
@@ -521,7 +609,7 @@ Commands are grouped by what they act on:
 | `rt release status` | one line per project: branch, freeze state, pins drift, rc/final tags, head, compare counters, pipeline |
 | `rt release notes` | prints markdown release notes: per project, what its latest tag added |
 | `rt deps freeze` | pins submodules to release branches, updates deps, commits and pushes |
-| `rt deps submodules` | moves every submodule to the head of the branch it already tracks |
+| `rt deps submodules` | moves the configured submodules to the head of the branch they already track |
 | `rt deps status` | shows how far submodule pins and module pins have drifted from their branches |
 | `rt deps check` | runs the kind's freshness checks (`go mod tidy -diff`, `uv lock --check`) |
 | `rt git cherry-pick` | moves commits from the dev branch into the release branch, chosen by hash, by ticket, or from a list |
@@ -564,7 +652,7 @@ project: `rt flow release api`.
 ```sh
 rt repo status                  # branch, dirty state, ahead/behind, pins
 rt repo status api worker       # only these projects
-rt repo check                   # config vs disk, deps_cmds programs on PATH
+rt repo check                   # config vs disk, cmds.deps programs on PATH
 rt repo sync                    # clone missing, fetch, fast-forward dev
 rt repo sync --no-pull          # fetch only, leave the dev branch where it is
 rt repo sync --checkout         # and put every clean working copy on the dev branch
@@ -576,7 +664,8 @@ rt repo exec -- git gc          # one shell command in every project
 
 `rt repo sync` fast-forwards the dev branch without moving HEAD: when another
 branch is checked out, the ref is updated and the working copy stays where it
-is. `--checkout` switches it to the dev branch as well, with the submodules
+is; when the dev branch is the one checked out, the submodules follow the pins
+the fast-forward brought, so a merged bump does not leave the tree dirty. `--checkout` switches it to the dev branch as well, with the submodules
 on the pins that branch records, so a release's worth of repositories comes
 back to `develop` in one go. The plan is the check before the switch: a
 project with uncommitted changes, untracked files included, is skipped and
@@ -717,12 +806,12 @@ carries a note instead of a tag keeps the plain project heading.
 
 ### changelog
 
-Every command in `changelog_cmds` runs in order in the project directory, with
+Every command in `cmds.changelog` runs in order in the project directory, with
 `changelog_env` in the environment, and each one redirects to the file it
 generates — the same two-generator setup the GitLab job uses (git-cliff plus a
 plain git-log document). Whatever the generators changed is then committed and
 pushed in one commit. A project can replace the list with its own
-`changelog_cmds` and override single environment keys with `changelog_env`;
+`cmds.changelog` and override single environment keys with `changelog_env`;
 project keys are merged over the global map, which is how a repository that
 keeps its own `cliff.toml` is expressed in one line.
 
@@ -770,14 +859,14 @@ rt changelog update api --branch release-1.5
 ```sh
 rt deps freeze                                    # the highest release branch
 rt deps freeze api --release-branch release-1.4   # an older one, one project
-rt deps freeze --no-deps                          # move the pins, run no deps_cmds
+rt deps freeze --no-deps                          # move the pins, run no deps commands
 ```
 
 On the release branch it rewrites the submodule branches in `.gitmodules`,
 fetches inside each submodule and runs `git submodule update --remote` — the
 fetch matters because git only fetches there on demand, so a branch created
 after the submodule was cloned would otherwise be missing. Then it moves the
-module refs of `deps_pins`, runs the project's `deps_cmds` and commits and
+module refs of `deps_pins`, runs the project's `cmds.deps` and commits and
 pushes whatever changed. Like `deps submodules`, the plan reads `.gitmodules` on
 the release branch rather than on whatever is checked out; a configured
 submodule that branch does not have is reported and skipped instead of failing
@@ -787,20 +876,25 @@ with a local clone, that is answered locally instead of over the network.
 
 ### deps submodules
 
-Moves every submodule to the head of the branch `.gitmodules` already has it
-tracking, runs the project's `deps_cmds` so a lock file follows the new pin,
-then commits and pushes. It is the everyday counterpart of `deps freeze`: freeze
-decides *which* branch a submodule follows and is a release act, this one only
-follows it further and works on the dev branch.
+Moves the project's configured submodules to the head of the branch
+`.gitmodules` already has them tracking, runs the project's `cmds.deps` so a
+lock file follows the new pin, then commits and pushes. It is the everyday
+counterpart of `deps freeze`: freeze decides *which* branch a submodule
+follows and is a release act, this one only follows it further and works on
+the dev branch. The scope is the same as freeze's — the `submodules` the
+project lists, or without a list every submodule another configured project
+provides — so a repository the project merely carries, a dashboard bundle or
+a vendored service that tracks a branch of its own, is never moved.
 
 ```sh
 rt deps submodules                          # every project, on its dev branch
 rt deps submodules api worker               # only these
 rt deps submodules --branch release-1.5     # somewhere other than the dev branch
 rt deps submodules --submodule pylib        # only this submodule path
-rt deps submodules --no-deps                # move the pins, run no deps_cmds
+rt deps submodules --no-deps                # move the pins, run no deps commands
 rt deps submodules --no-commit              # update the working tree, commit nothing
 rt deps submodules --allow-dirty            # finish what a --no-commit run left
+rt deps submodules --mr                     # commit to a branch and open a merge request
 ```
 
 `--no-commit` leaves its work in the tree, which the next ordinary run refuses
@@ -833,7 +927,7 @@ rt deps status api worker         # only these
 ```
 
 The read-only answer to "is a `deps submodules` or `deps freeze` run due".
-For every submodule that tracks a branch: the recorded pin against the head
+For every configured submodule that tracks a branch: the recorded pin against the head
 of that branch, inside the submodule's own clone — `ok`, `behind N
 commit(s)`, or `diverged` when the pin is not on the branch at all. For every
 `module@ref` of the deps kind's pin variable: whether the ref is the branch
@@ -853,7 +947,7 @@ rt deps check                     # every project
 rt deps check api                 # one project
 ```
 
-Runs the deps kind's freshness checks from `deps_check_cmds` in each
+Runs the deps kind's freshness checks from `cmds.deps_check` in each
 project's working copy, through direnv where there is an `.envrc` — the same
 way `deps freeze` runs the real commands. A check that exits non-zero marks
 the project stale and its output says why; the run then fails naming how many
@@ -861,15 +955,16 @@ projects need attention. The commands are the config's, nothing about a
 language is built in:
 
 ```yaml
-deps_check_cmds:
-  uv:
-    - "uv lock --check"           # uv.lock still matches pyproject.toml?
-  go:
-    - "go mod tidy -diff"         # go.mod/go.sum still tidy? (Go >= 1.23)
+cmds:
+  deps_check:
+    uv:
+      - "uv lock --check"         # uv.lock still matches pyproject.toml?
+    go:
+      - "go mod tidy -diff"       # go.mod/go.sum still tidy? (Go >= 1.23)
 ```
 
-A project can replace its kind's list with its own `deps_check_cmds`; a kind
-with no checks is skipped. Keys must be `deps_cmds` kinds, anything else is a
+A project can replace its kind's list with its own `cmds.deps_check`; a kind
+with no checks is skipped. Keys must be `cmds.deps` kinds, anything else is a
 config error.
 
 ### git cherry-pick

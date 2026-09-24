@@ -106,10 +106,10 @@ func pinReports(rctx *run.Ctx, p *config.Project, r gitx.Repo, ref string, fetch
 	return append(reports, modulePinLines(rctx, r, p, ref, fetched)...)
 }
 
-// submodulePinLines compares each tracked submodule's recorded pin with the
-// head of the branch it tracks, inside the submodule's own clone.
+// submodulePinLines compares each configured submodule's recorded pin with
+// the head of the branch it tracks, inside the submodule's own clone.
 func submodulePinLines(rctx *run.Ctx, p *config.Project, r gitx.Repo, ref string) []pinReport {
-	targets, untracked, err := trackedSubmodules(r, ref, nil)
+	targets, untracked, err := configuredSubmodules(rctx, r, p, ref, nil)
 	if err != nil {
 		return []pinReport{{Line: fmt.Sprintf("cannot read .gitmodules: %v", err), Drifted: true}}
 	}

@@ -56,7 +56,7 @@ func TestSubmodulePinLines(t *testing.T) {
 	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
 	git(t, f.parent, "update-ref", "refs/remotes/origin/release-1.0", "release-1.0")
 
-	lines := submodulePinLines(testCtx(), p, r, "origin/release-1.0")
+	lines := submodulePinLines(ctxFor(p), p, r, "origin/release-1.0")
 	if len(lines) != 1 || lines[0].Drifted || !strings.Contains(lines[0].Line, "submodule sub") {
 		t.Errorf("lines = %+v", lines)
 	}
@@ -119,7 +119,7 @@ func TestModulePinLines(t *testing.T) {
 	git(t, f.parent, "update-ref", "refs/remotes/origin/develop", "develop")
 
 	path := filepath.Join(t.TempDir(), "config.yaml")
-	body := "deps_cmds:\n  go: [\"go mod tidy\"]\n" +
+	body := "cmds: {deps: {go: [\"go mod tidy\"]}}\n" +
 		"deps_pins:\n  go: {file: Makefile, var: GO_DEPS_UPDATE_INTERNAL}\n" +
 		"projects:\n" +
 		"  - {name: parent, git: " + f.parent + ", project_dir: " + f.parent + ", deps: go}\n" +
@@ -165,20 +165,20 @@ func TestDepsCheckProject(t *testing.T) {
 	p.Deps = "go"
 
 	rctx := testCtx()
-	rctx.Cfg.DepsCmds = map[string][]string{"go": {"true"}}
-	rctx.Cfg.DepsCheckCmds = map[string][]string{"go": {"true"}}
+	rctx.Cfg.Cmds.Deps = map[string][]string{"go": {"true"}}
+	rctx.Cfg.Cmds.DepsCheck = map[string][]string{"go": {"true"}}
 
 	if ok, ran := depsCheckProject(rctx, p); !ok || !ran {
 		t.Errorf("passing check: ok=%v ran=%v", ok, ran)
 	}
 
-	rctx.Cfg.DepsCheckCmds["go"] = []string{"false"}
+	rctx.Cfg.Cmds.DepsCheck["go"] = []string{"false"}
 
 	if ok, ran := depsCheckProject(rctx, p); ok || !ran {
 		t.Errorf("failing check: ok=%v ran=%v", ok, ran)
 	}
 
-	rctx.Cfg.DepsCheckCmds = nil
+	rctx.Cfg.Cmds.DepsCheck = nil
 
 	if _, ran := depsCheckProject(rctx, p); ran {
 		t.Error("no checks configured must not count as a run")

@@ -121,11 +121,18 @@ func TestSyncProjectFastForwardsTheDevBranch(t *testing.T) {
 	git(t, f.parent, "checkout", "--quiet", "develop")
 	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
 
-	// origin/develop one commit ahead of the local branch.
+	// origin/develop one commit ahead of the local branch, and that commit
+	// moves the submodule pin — the shape a merged bump has.
+	git(t, f.sub, "checkout", "--quiet", "develop")
+	writeFile(t, f.sub, "lib.txt", "v3\n")
+	newPin := commit(t, f.sub, "sub: more develop work")
+	git(t, filepath.Join(f.parent, "sub"), "fetch", "--quiet", "origin")
+	git(t, filepath.Join(f.parent, "sub"), "checkout", "--quiet", "--detach", newPin)
 	writeFile(t, f.parent, "app.txt", "remote work\n")
-	ahead := commit(t, f.parent, "parent: remote work")
+	ahead := commit(t, f.parent, "parent: remote work with a pin bump")
 	publishOrigin(t, f.parent, "develop")
 	git(t, f.parent, "reset", "--hard", "--quiet", "HEAD~1")
+	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
 
 	rctx := &run.Ctx{Cfg: &config.Config{Confirm: config.ConfirmNever}, FetchFlag: &offline}
 	if err := syncProject(rctx, p, syncOptions{}); err != nil {
@@ -134,6 +141,21 @@ func TestSyncProjectFastForwardsTheDevBranch(t *testing.T) {
 
 	if head := git(t, f.parent, "rev-parse", "HEAD"); head != ahead {
 		t.Errorf("develop was not fast-forwarded: %s", head)
+	}
+
+	// The worktree follows the pin the fast-forward brought, or the next run
+	// would find a dirty tree.
+	if got := subPin(t, f.parent); got != newPin {
+		t.Errorf("submodule sits on %s, want the new pin %s", got, newPin)
+	}
+
+	if status := git(t, f.parent, "status", "--porcelain"); status != "" {
+		t.Errorf("the tree is not clean after the sync:\n%s", status)
+	}
+
+	// And a second sync has nothing to complain about.
+	if err := syncProject(rctx, p, syncOptions{}); err != nil {
+		t.Errorf("the second sync must pass: %v", err)
 	}
 }
 

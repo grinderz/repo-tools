@@ -28,6 +28,24 @@ const (
 	CINone   = "none"
 	CIGitLab = "gitlab"
 	CIGitHub = "github"
+
+	// MRNone keeps a project's commits out of merge requests even under
+	// --mr; MRAlways routes them through merge requests unless --no-mr says
+	// otherwise. Unset means the mode is on only when --mr asks for it.
+	MRNone   = "none"
+	MRAlways = "always"
+
+	// MRWaitDependents, MRWaitAlways and MRWaitNone are the merge_request.wait
+	// values: wait for the request to be merged only when a project still to
+	// come in the run depends on this one, always, or never.
+	MRWaitDependents = "dependents"
+	MRWaitAlways     = "always"
+	MRWaitNone       = "none"
+
+	// HookAsk, HookWait and HookDone are the events hooks attach to.
+	HookAsk  = "ask"
+	HookWait = "wait"
+	HookDone = "done"
 )
 
 // FreezeToProject is the freeze_to value meaning "whatever branch the project
@@ -59,6 +77,7 @@ const (
 	defaultCIPoll    = 10 * time.Second
 	defaultCIWait    = 30 * time.Minute
 	defaultCIRetries = 1
+	defaultMRWait    = 60 * time.Minute
 )
 
 type Submodule struct {
@@ -72,6 +91,7 @@ type Submodule struct {
 type Defaults struct {
 	Deps                string `yaml:"deps"`
 	CI                  string `yaml:"ci"`
+	MR                  string `yaml:"mr"`
 	DevBranch           string `yaml:"dev_branch"`
 	ChangelogBranch     string `yaml:"changelog_branch"`
 	Changelog           *bool  `yaml:"changelog"`
@@ -88,16 +108,24 @@ type Project struct {
 	// CI names the system whose pipeline every push of a commit or a tag is
 	// watched on afterwards: gitlab (through glab), github (through gh), or
 	// none. Default none — the watch is opt-in; --no-ci skips it for one run.
-	CI                  string            `yaml:"ci"`
-	DevBranch           string            `yaml:"dev_branch"`
-	ChangelogBranch     string            `yaml:"changelog_branch"` // empty = dev_branch
-	Changelog           *bool             `yaml:"changelog"`
-	ChangelogCmds       []string          `yaml:"changelog_cmds"`  // replaces the global list
-	ChangelogEnv        map[string]string `yaml:"changelog_env"`   // merged over the global map
-	DepsCmds            []string          `yaml:"deps_cmds"`       // replaces the list of its deps kind
-	DepsCheckCmds       []string          `yaml:"deps_check_cmds"` // replaces the list of its deps kind
-	DepsFreeze          *bool             `yaml:"deps_freeze"`
-	ReleaseBranchPrefix string            `yaml:"release_branch_prefix"`
+	CI              string            `yaml:"ci"`
+	MR              string            `yaml:"mr"`           // always | none | unset: only under --mr
+	MRAssignees     []string          `yaml:"mr_assignees"` // replaces merge_request.assignees
+	MRReviewers     []string          `yaml:"mr_reviewers"` // replaces merge_request.reviewers
+	DevBranch       string            `yaml:"dev_branch"`
+	ChangelogBranch string            `yaml:"changelog_branch"` // empty = dev_branch
+	Changelog       *bool             `yaml:"changelog"`
+	ChangelogEnv    map[string]string `yaml:"changelog_env"` // merged over the global map
+	// Cmds are the project's own command lists, each replacing the global one
+	// (its deps kind's, for deps and deps_check) outright.
+	Cmds ProjectCmds `yaml:"cmds"`
+	// The keys the command lists had before cmds; named so a config that
+	// still uses one is told where it went, not just that it is unknown.
+	LegacyChangelogCmds []string `yaml:"changelog_cmds"`  //nolint:tagliatelle // the old key
+	LegacyDepsCmds      []string `yaml:"deps_cmds"`       //nolint:tagliatelle // the old key
+	LegacyDepsCheckCmds []string `yaml:"deps_check_cmds"` //nolint:tagliatelle // the old key
+	DepsFreeze          *bool    `yaml:"deps_freeze"`
+	ReleaseBranchPrefix string   `yaml:"release_branch_prefix"`
 	// Fetch allows commands to refresh this project's remote refs. Set it to
 	// false for a repository whose remote costs something to reach — another
 	// credential, another hardware key — and every command will work with the
@@ -134,6 +162,104 @@ type DepsPin struct {
 	Var  string `yaml:"var"`
 }
 
+// Cmds are the shell commands the projects run, in one block. Changelog runs
+// in order in the project directory, each command redirecting to the file it
+// generates. Deps holds the dependency commands of every deps kind, keyed by
+// the name a project puts in its deps field — the kinds are whatever the
+// config defines, nothing about go or uv is built in. DepsCheck holds, per
+// kind, the read-only commands deps check runs to tell whether the
+// dependency files are current: commands that exit non-zero when running the
+// real ones would change something, like "go mod tidy -diff".
+type Cmds struct {
+	Changelog []string            `yaml:"changelog"`
+	Deps      map[string][]string `yaml:"deps"`
+	DepsCheck map[string][]string `yaml:"deps_check"`
+}
+
+// ProjectCmds are one project's own lists, each replacing the global one.
+type ProjectCmds struct {
+	Changelog []string `yaml:"changelog"`
+	Deps      []string `yaml:"deps"`
+	DepsCheck []string `yaml:"deps_check"`
+}
+
+// MergeRequest shapes the merge request a commit goes through when a
+// project's mr says so: Branch names the branch the commit goes to and
+// Title the request, both templates. Whether a project uses the mode at all
+// is its mr setting, next to ci, the way a protected dev branch is a
+// property of the project and not of the run.
+type MergeRequest struct {
+	Branch string `yaml:"branch"`
+	Title  string `yaml:"title"`
+	// Description is the request's body, a template; empty leaves the body
+	// to Template, or to the system — the API applies no template of the
+	// repository's, only the web form does.
+	Description string `yaml:"description"`
+	// Template names a merge request template of the repository —
+	// .gitlab/merge_request_templates/<name>.md, or
+	// .github/PULL_REQUEST_TEMPLATE/<name>.md — read from the target branch
+	// and used as the body, placeholders expanded, when Description is
+	// empty. Unset means no template.
+	Template string `yaml:"template"`
+	// Assignees and Reviewers are usernames; a project may override either.
+	Assignees []string `yaml:"assignees"`
+	Reviewers []string `yaml:"reviewers"`
+	// Wait says when a command waits for its request to be merged before
+	// going on to the next project: dependents (the default — only when a
+	// project still to come depends on this one), always, or none.
+	Wait string `yaml:"wait"`
+	// WaitMinutes is how long that wait may take; unset means 60.
+	WaitMinutes *int `yaml:"wait_minutes"`
+	// SettleSeconds is a pause after the merge, for what the merge sets in
+	// motion — a package build, a registry — to land before the next project
+	// pulls it. Unset means none.
+	SettleSeconds *int `yaml:"settle_seconds"`
+}
+
+// WaitFor is how long a request may take to be merged before the wait gives up.
+func (m *MergeRequest) WaitFor() time.Duration {
+	if m.WaitMinutes != nil && *m.WaitMinutes > 0 {
+		return time.Duration(*m.WaitMinutes) * time.Minute
+	}
+
+	return defaultMRWait
+}
+
+// Settle is the pause after the merge.
+func (m *MergeRequest) Settle() time.Duration {
+	if m.SettleSeconds != nil && *m.SettleSeconds > 0 {
+		return time.Duration(*m.SettleSeconds) * time.Second
+	}
+
+	return 0
+}
+
+// applyDefaults fills the templates and the wait in and refuses a wait value
+// the commands would not understand. The command in the branch name keeps
+// the branches of two commands run on the same day apart: a rerun of one
+// rewrites its own branch, never the other's.
+func (m *MergeRequest) applyDefaults() error {
+	if m.Branch == "" {
+		m.Branch = "rt/{command}/{branch}/{date}"
+	}
+
+	if m.Title == "" {
+		m.Title = "{message}"
+	}
+
+	if m.Wait == "" {
+		m.Wait = MRWaitDependents
+	}
+
+	switch m.Wait {
+	case MRWaitDependents, MRWaitAlways, MRWaitNone:
+		return nil
+	default:
+		return fmt.Errorf("merge_request: wait: %q %w %s, %s, %s",
+			m.Wait, errNotOneOf, MRWaitDependents, MRWaitAlways, MRWaitNone)
+	}
+}
+
 type Config struct {
 	ProjectsDir string `yaml:"projects_dir"`
 	// ProductVersion names the release the whole set of projects belongs to,
@@ -144,31 +270,26 @@ type Config struct {
 	RcTagMessage string `yaml:"rc_tag_message"`
 	Confirm      string `yaml:"confirm"`
 
-	// ChangelogCmds run in order in the project directory, each one
-	// redirecting to the file it generates.
-	ChangelogCmds []string          `yaml:"changelog_cmds"`
-	ChangelogEnv  map[string]string `yaml:"changelog_env"`
+	// Cmds are the shell commands the projects run: changelog generation,
+	// dependency updates and freshness checks, in one block.
+	Cmds Cmds `yaml:"cmds"`
+	// ChangelogEnv is the environment of the changelog commands.
+	ChangelogEnv map[string]string `yaml:"changelog_env"`
+	// The keys the command lists had before cmds, kept only to point at the
+	// new place.
+	LegacyChangelogCmds []string            `yaml:"changelog_cmds"`  //nolint:tagliatelle // the old key
+	LegacyDepsCmds      map[string][]string `yaml:"deps_cmds"`       //nolint:tagliatelle // the old key
+	LegacyDepsCheckCmds map[string][]string `yaml:"deps_check_cmds"` //nolint:tagliatelle // the old key
 	// ChangelogInitSubmodules checks submodules out before generating, which a
 	// git-cliff config living in a submodule needs. Defaults to true.
 	ChangelogInitSubmodules *bool `yaml:"changelog_init_submodules"`
 
-	// DepsCmds holds the dependency commands of every deps kind, keyed by the
-	// name a project puts in its deps field. The kinds are whatever the config
-	// defines: nothing about go or uv is built in.
-	DepsCmds map[string][]string `yaml:"deps_cmds"`
-
 	// DepsPins says where a deps kind keeps the refs of its internal
 	// dependencies when they are not submodules, keyed the same way as
-	// DepsCmds. Go projects list them as module@ref in a make variable, and a
-	// freeze has to move those refs too or the deps commands would resolve dev
-	// heads on the release branch.
+	// cmds.deps. Go projects list them as module@ref in a make variable, and
+	// a freeze has to move those refs too or the deps commands would resolve
+	// dev heads on the release branch.
 	DepsPins map[string]DepsPin `yaml:"deps_pins"`
-
-	// DepsCheckCmds holds, per deps kind, the read-only commands deps check
-	// runs to tell whether the dependency files are current — commands that
-	// exit non-zero when running the real ones would change something, like
-	// "go mod tidy -diff" or "uv lock --check".
-	DepsCheckCmds map[string][]string `yaml:"deps_check_cmds"`
 
 	// Disable refuses commands this config has no business running, by their
 	// name under rt ("deps freeze", "release tag"). A group name disables
@@ -178,6 +299,12 @@ type Config struct {
 	// Report is the table repo report prints, one entry per column. Empty
 	// means the built-in project/branch/commit table.
 	Report []ReportColumn `yaml:"report"`
+
+	// Hooks are shell commands run at rt's own events — ask, wait, done — with
+	// the event in RT_* variables: a desktop notification when a question is
+	// on screen or a flow is over. A hook's failure is a warning, never an
+	// error.
+	Hooks map[string][]string `yaml:"hooks"`
 
 	// Flows are named sequences of rt commands, run in order over one project
 	// list by rt flow <name>. A step is a command name the way Disable writes
@@ -232,6 +359,10 @@ type Config struct {
 	RebasePinCommitMessage string `yaml:"rebase_pin_commit_message"`
 	ReleaseTagMessage      string `yaml:"release_tag_message"`
 
+	// MergeRequest is the branch and title of the requests the committing
+	// commands open for the projects whose mr says so.
+	MergeRequest MergeRequest `yaml:"merge_request"`
+
 	// NotesHeader and NotesSectionTitle shape the release notes document:
 	// the first line of the whole document, and the heading of each
 	// project's section ({tag} is the tag the section describes). Unset
@@ -243,47 +374,65 @@ type Config struct {
 	Projects []*Project `yaml:"projects"`
 }
 
+// MRAssigneesFor and MRReviewersFor are who a project's requests go to: its
+// own list when it has one, the global one otherwise.
+func (c *Config) MRAssigneesFor(p *Project) []string {
+	if len(p.MRAssignees) > 0 {
+		return p.MRAssignees
+	}
+
+	return c.MergeRequest.Assignees
+}
+
+func (c *Config) MRReviewersFor(p *Project) []string {
+	if len(p.MRReviewers) > 0 {
+		return p.MRReviewers
+	}
+
+	return c.MergeRequest.Reviewers
+}
+
 // ChangelogCommands returns the generator commands for this project: its own
 // list when it has one, the global list otherwise.
 func (c *Config) ChangelogCommands(p *Project) []string {
-	if len(p.ChangelogCmds) > 0 {
-		return p.ChangelogCmds
+	if len(p.Cmds.Changelog) > 0 {
+		return p.Cmds.Changelog
 	}
 
-	return c.ChangelogCmds
+	return c.Cmds.Changelog
 }
 
 // DepsCommands returns the dependency commands to run for this project: its
 // own list when it has one, otherwise the list its deps kind names.
 func (c *Config) DepsCommands(p *Project) []string {
-	if len(p.DepsCmds) > 0 {
-		return p.DepsCmds
+	if len(p.Cmds.Deps) > 0 {
+		return p.Cmds.Deps
 	}
 
 	if p.Deps == DepsNone {
 		return nil
 	}
 
-	return c.DepsCmds[p.Deps]
+	return c.Cmds.Deps[p.Deps]
 }
 
 // DepsCheckCommands returns the freshness checks to run for this project: its
 // own list when it has one, otherwise the list its deps kind names.
 func (c *Config) DepsCheckCommands(p *Project) []string {
-	if len(p.DepsCheckCmds) > 0 {
-		return p.DepsCheckCmds
+	if len(p.Cmds.DepsCheck) > 0 {
+		return p.Cmds.DepsCheck
 	}
 
 	if p.Deps == DepsNone {
 		return nil
 	}
 
-	return c.DepsCheckCmds[p.Deps]
+	return c.Cmds.DepsCheck[p.Deps]
 }
 
 // DepsKinds lists the configured deps kinds, sorted, for error messages.
 func (c *Config) DepsKinds() []string {
-	kinds := slices.Sorted(maps.Keys(c.DepsCmds))
+	kinds := slices.Sorted(maps.Keys(c.Cmds.Deps))
 
 	return kinds
 }
@@ -570,6 +719,18 @@ func (c *Config) applyDefaults() error {
 		c.SubmodulesCommitMessage = "chore(deps): update submodules on {branch}"
 	}
 
+	if err := c.MergeRequest.applyDefaults(); err != nil {
+		return err
+	}
+
+	if err := c.validateHooks(); err != nil {
+		return err
+	}
+
+	if err := c.rejectLegacyCmds(); err != nil {
+		return err
+	}
+
 	if err := c.validateDeps(c.Defaults.Deps, "defaults"); err != nil {
 		return err
 	}
@@ -604,6 +765,48 @@ func (c *Config) applyDefaults() error {
 // productVersionVar is how a template asks for the product version.
 const productVersionVar = "{product_version}"
 
+// rejectLegacyCmds names the block a pre-cmds key moved into: an unknown key
+// would be refused anyway, but not with directions.
+func (c *Config) rejectLegacyCmds() error {
+	switch {
+	case c.LegacyChangelogCmds != nil:
+		return fmt.Errorf("changelog_cmds %w cmds.changelog", errMovedTo)
+	case c.LegacyDepsCmds != nil:
+		return fmt.Errorf("deps_cmds %w cmds.deps", errMovedTo)
+	case c.LegacyDepsCheckCmds != nil:
+		return fmt.Errorf("deps_check_cmds %w cmds.deps_check", errMovedTo)
+	}
+
+	return nil
+}
+
+func (p *Project) rejectLegacyCmds() error {
+	switch {
+	case p.LegacyChangelogCmds != nil:
+		return fmt.Errorf("project %s: changelog_cmds %w cmds.changelog", p.Name, errMovedTo)
+	case p.LegacyDepsCmds != nil:
+		return fmt.Errorf("project %s: deps_cmds %w cmds.deps", p.Name, errMovedTo)
+	case p.LegacyDepsCheckCmds != nil:
+		return fmt.Errorf("project %s: deps_check_cmds %w cmds.deps_check", p.Name, errMovedTo)
+	}
+
+	return nil
+}
+
+// validateHooks refuses an event rt never fires: a typo would otherwise be a
+// hook that silently never runs.
+func (c *Config) validateHooks() error {
+	for event := range c.Hooks {
+		switch event {
+		case HookAsk, HookWait, HookDone:
+		default:
+			return fmt.Errorf("hooks: %q %w %s, %s, %s", event, errNotOneOf, HookAsk, HookWait, HookDone)
+		}
+	}
+
+	return nil
+}
+
 // validateProductVersion refuses a template that asks for a product version
 // the config does not set: the alternative is a tag message with a literal
 // {product_version} in it, discovered after the tag is pushed.
@@ -621,7 +824,7 @@ func (c *Config) validateProductVersion() error {
 		"rebase_pin_commit_message": {c.RebasePinCommitMessage},
 		"notes_header":              {c.NotesHeader},
 		"notes_section_title":       {c.NotesSectionTitle},
-		"changelog_cmds":            c.ChangelogCmds,
+		"cmds.changelog":            c.Cmds.Changelog,
 		"changelog_env":             slices.Sorted(maps.Values(c.ChangelogEnv)),
 	}
 
@@ -643,7 +846,7 @@ func (c *Config) validateDepsPins() error {
 	for _, kind := range slices.Sorted(maps.Keys(c.DepsPins)) {
 		pin := c.DepsPins[kind]
 
-		if _, ok := c.DepsCmds[kind]; !ok {
+		if _, ok := c.Cmds.Deps[kind]; !ok {
 			return fmt.Errorf("deps_pins: %q %w (defined: %s)",
 				kind, errNotDepsKind, strings.Join(c.DepsKinds(), ", "))
 		}
@@ -656,12 +859,12 @@ func (c *Config) validateDepsPins() error {
 	return nil
 }
 
-// validateDepsCheckCmds keeps deps_check_cmds keyed by kinds that exist: a
+// validateDepsCheckCmds keeps cmds.deps_check keyed by kinds that exist: a
 // check under a misspelled kind would silently never run.
 func (c *Config) validateDepsCheckCmds() error {
-	for _, kind := range slices.Sorted(maps.Keys(c.DepsCheckCmds)) {
-		if _, ok := c.DepsCmds[kind]; !ok {
-			return fmt.Errorf("deps_check_cmds: %q %w (defined: %s)",
+	for _, kind := range slices.Sorted(maps.Keys(c.Cmds.DepsCheck)) {
+		if _, ok := c.Cmds.Deps[kind]; !ok {
+			return fmt.Errorf("cmds.deps_check: %q %w (defined: %s)",
 				kind, errNotDepsKind, strings.Join(c.DepsKinds(), ", "))
 		}
 	}
@@ -695,18 +898,18 @@ func (c *Config) validateFlows() error {
 }
 
 // validateDeps accepts an empty value: the caller falls back to a default.
-// Every other kind has to be one deps_cmds defines, so a typo is caught here
+// Every other kind has to be one cmds.deps defines, so a typo is caught here
 // instead of silently running no dependency command at all.
 func (c *Config) validateDeps(deps, where string) error {
 	if deps == "" || deps == DepsNone {
 		return nil
 	}
 
-	if _, ok := c.DepsCmds[deps]; ok {
+	if _, ok := c.Cmds.Deps[deps]; ok {
 		return nil
 	}
 
-	if len(c.DepsCmds) == 0 {
+	if len(c.Cmds.Deps) == 0 {
 		return fmt.Errorf("%s: deps: %q %w", where, deps, errNoDepsKinds)
 	}
 
@@ -723,6 +926,7 @@ func (c *Config) applyProjectDefaults(p *Project) {
 	p.ReleaseBranchPrefix = firstNonEmpty(p.ReleaseBranchPrefix, def.ReleaseBranchPrefix, defaultReleaseBranchPrefix)
 	p.Deps = firstNonEmpty(p.Deps, def.Deps, DepsNone)
 	p.CI = firstNonEmpty(p.CI, def.CI, CINone)
+	p.MR = firstNonEmpty(p.MR, def.MR) // no built-in: unset is a state of its own
 	p.ChangelogBranch = firstNonEmpty(p.ChangelogBranch, def.ChangelogBranch)
 
 	if p.Changelog == nil {
@@ -760,9 +964,13 @@ func (c *Config) prepareProject(p *Project) error {
 
 	c.applyProjectDefaults(p)
 
-	// A project with its own deps_cmds names the commands outright, so its
+	if err := p.rejectLegacyCmds(); err != nil {
+		return err
+	}
+
+	// A project with its own cmds.deps names the commands outright, so its
 	// deps kind no longer has to resolve to anything.
-	if len(p.DepsCmds) == 0 {
+	if len(p.Cmds.Deps) == 0 {
 		if err := c.validateDeps(p.Deps, "project "+p.Name); err != nil {
 			return err
 		}
@@ -773,6 +981,12 @@ func (c *Config) prepareProject(p *Project) error {
 	default:
 		return fmt.Errorf("project %s: ci: %q %w %s, %s, %s",
 			p.Name, p.CI, errNotOneOf, CINone, CIGitLab, CIGitHub)
+	}
+
+	switch p.MR {
+	case "", MRNone, MRAlways:
+	default:
+		return fmt.Errorf("project %s: mr: %q %w %s, %s", p.Name, p.MR, errNotOneOf, MRAlways, MRNone)
 	}
 
 	if p.ChangelogEnabled() && len(c.ChangelogCommands(p)) == 0 {

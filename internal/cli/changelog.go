@@ -18,7 +18,7 @@ func newChangelogCmd(rctx *run.Ctx, name string) *cobra.Command {
 	c := &cobra.Command{
 		Use:   name + " [project...]",
 		Short: "Regenerate changelogs, commit and push when files changed",
-		Long: "Runs every command of changelog_cmds in order in the project directory,\n" +
+		Long: "Runs every command of cmds.changelog in order in the project directory,\n" +
 			"with changelog_env in the environment, then commits and pushes whatever\n" +
 			"the generators changed.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -91,7 +91,7 @@ func planChangelog(rctx *run.Ctx, p *config.Project, branchOverride string) run.
 	}
 
 	st.Plan = append(st.Plan,
-		commitPlanLines(rctx, p, branch, "files changed", changelogMessage(rctx, p, branch))...)
+		commitPlanLines(rctx, p, cmdChangelogUpdate, branch, "files changed", changelogMessage(rctx, p, branch))...)
 	st.Exec = func() error { return runChangelog(rctx, p, branch) }
 
 	return st
@@ -216,5 +216,5 @@ func runChangelog(rctx *run.Ctx, p *config.Project, branch string) error {
 
 	msg := changelogMessage(rctx, p, branch)
 
-	return commitAndPush(rctx, r, p, branch, msg, "no changelog changes")
+	return commitAndPush(rctx, r, p, cmdChangelogUpdate, branch, msg, "no changelog changes")
 }

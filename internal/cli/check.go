@@ -36,6 +36,13 @@ func newCheckCmd(rctx *run.Ctx, name string) *cobra.Command {
 				}
 			}
 
+			// The hooks are the config's, not a project's: checked once.
+			if issues := checkHooks(rctx.Cfg); len(issues) > 0 {
+				report("hooks", issues)
+
+				problems++
+			}
+
 			if problems > 0 {
 				return fmt.Errorf("%d %w", problems, errWithIssues)
 			}
@@ -66,6 +73,7 @@ func checkProject(rctx *run.Ctx, p *config.Project) []string {
 	issues = append(issues, checkSubmodules(rctx, r, p)...)
 	issues = append(issues, checkDeps(rctx, p)...)
 	issues = append(issues, checkCI(p)...)
+	issues = append(issues, mrCheck(rctx, p)...)
 	issues = append(issues, checkChangelog(rctx, r, p)...)
 
 	return issues
@@ -86,7 +94,7 @@ func checkChangelog(rctx *run.Ctx, r gitx.Repo, p *config.Project) []string {
 
 	cmds := changelogCmds(rctx, p, branch)
 	if len(cmds) == 0 {
-		issues = append(issues, "changelog is enabled but no changelog_cmds are set")
+		issues = append(issues, "changelog is enabled but no cmds.changelog are set")
 	}
 
 	issues = append(issues, checkPrograms("changelog", cmds)...)
@@ -314,6 +322,21 @@ func checkCI(p *config.Project) []string {
 	}
 
 	return nil
+}
+
+// checkHooks reports hook commands whose program is not on PATH — a notifier
+// that is missing would only be found out as a warning in the middle of a
+// release, when nobody is watching.
+//
+//nolint:prealloc // three events, and usually no issue at all
+func checkHooks(cfg *config.Config) []string {
+	var issues []string
+
+	for _, event := range []string{config.HookAsk, config.HookWait, config.HookDone} {
+		issues = append(issues, checkPrograms("hooks."+event, cfg.Hooks[event])...)
+	}
+
+	return issues
 }
 
 // checkDeps reports dependency commands that cannot run here: the config says

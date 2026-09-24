@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -39,13 +40,17 @@ func fileExists(p string) bool {
 }
 
 func NewRoot() *cobra.Command {
-	var (
-		cfgPath        string
-		diff, noDiff   bool
-		fetch, noFetch bool
-		color, noColor bool
-	)
+	root, _ := newRoot()
 
+	return root
+}
+
+// newRoot builds the command tree and hands the context back with it, for
+// the outcome Main reports.
+func newRoot() (*cobra.Command, *run.Ctx) {
+	var cfgPath string
+
+	switches := &rootSwitches{}
 	rctx := &run.Ctx{}
 
 	root := &cobra.Command{
@@ -53,10 +58,12 @@ func NewRoot() *cobra.Command {
 		Short:         "Batch workflows over a configured set of git repositories",
 		SilenceUsage:  true,
 		SilenceErrors: true,
-		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			if cmd.Name() == helpCmdName || cmd.Name() == completionName || skipsConfig(cmd) {
 				return nil
 			}
+
+			rctx.Command = strings.TrimSpace(commandKey(cmd) + " " + strings.Join(args, " "))
 
 			path := cfgPath
 			if path == "" {
@@ -75,28 +82,21 @@ func NewRoot() *cobra.Command {
 				return err
 			}
 
-			if err := checkFlows(cmd.Root(), cfg); err != nil {
+			if err := checkFlows(cfg); err != nil {
 				return err
 			}
 
-			if err := rejectBothFlags(diff, noDiff, "--diff", "--no-diff"); err != nil {
+			// The switches are derived here and again by a flow after a step
+			// parses its own flags: the derivation must see those too.
+			rctx.ApplyFlags = func() error {
+				return applySwitches(rctx, switches)
+			}
+
+			if err := rctx.ApplyFlags(); err != nil {
 				return err
 			}
 
-			if err := rejectBothFlags(fetch, noFetch, "--fetch", "--no-fetch"); err != nil {
-				return err
-			}
-
-			if err := rejectBothFlags(color, noColor, "--color", "--no-color"); err != nil {
-				return err
-			}
-
-			rctx.DiffFlag = override(diff, noDiff)
-			rctx.FetchFlag = override(fetch, noFetch)
-			rctx.ColorFlag = override(color, noColor)
-			run.SetColor(rctx.UseColor())
-			gitx.SetPlainOutput(!rctx.UseColor())
-
+			run.SetHooks(cfg.Hooks, rctx.Command, rctx.DryRun)
 			reportInputs(path, rctx)
 
 			return nil
@@ -114,12 +114,15 @@ func NewRoot() *cobra.Command {
 	flags.BoolVar(&rctx.DryRun, "dry-run", false, "print the plan and exit without executing")
 	flags.BoolVarP(&rctx.Yes, "yes", "y", false, "do not ask for confirmation")
 	flags.BoolVar(&rctx.ForceConfirm, "confirm", false, "ask for confirmation even when config says never")
-	flags.BoolVar(&fetch, "fetch", false, "fetch from origin even where a command would not")
-	flags.BoolVar(&noFetch, "no-fetch", false, "do not fetch, work with the refs already present")
-	flags.BoolVar(&diff, "diff", false, "show the staged diff and ask before every commit (on by default)")
-	flags.BoolVar(&noDiff, "no-diff", false, "commit without showing the diff and asking")
-	flags.BoolVar(&color, "color", false, "colour diffs, warnings and errors (default: when on a terminal)")
-	flags.BoolVar(&noColor, "no-color", false, "plain output, no escape sequences")
+	flags.BoolVar(&switches.fetch, "fetch", false, "fetch from origin even where a command would not")
+	flags.BoolVar(&switches.noFetch, "no-fetch", false, "do not fetch, work with the refs already present")
+	flags.BoolVar(&switches.diff, "diff", false, "show the staged diff and ask before every commit (on by default)")
+	flags.BoolVar(&switches.noDiff, "no-diff", false, "commit without showing the diff and asking")
+	flags.BoolVar(&switches.color, "color", false, "colour diffs, warnings and errors (default: when on a terminal)")
+	flags.BoolVar(&switches.noColor, "no-color", false, "plain output, no escape sequences")
+	flags.BoolVar(&switches.mr, "mr", false,
+		"commit to a branch and open a merge request instead of pushing to the target branch")
+	flags.BoolVar(&switches.noMR, "no-mr", false, "push to the target branch even where the config says mr: always")
 	flags.BoolVar(&rctx.NoCI, "no-ci", false,
 		"do not watch the pipeline after pushes, whatever the projects' ci settings say")
 	flags.BoolVar(&rctx.KeepGoing, "keep-going", false,
@@ -129,7 +132,35 @@ func NewRoot() *cobra.Command {
 	root.SetHelpCommand(newHelpCmd(root))
 	addCommands(root, rctx)
 
-	return root
+	return root, rctx
+}
+
+// Main runs rt as the binary does: the command line, the error on stderr,
+// and the done hook with the outcome — which the command tree cannot fire
+// itself, since cobra runs no hook of its own after a failed command.
+func Main() int {
+	root, rctx := newRoot()
+
+	err := root.Execute()
+
+	status, message := run.StatusOK, ""
+
+	switch {
+	case errors.Is(err, errDeclined), err == nil && rctx.Aborted:
+		status = run.StatusDeclined
+	case err != nil:
+		status, message = run.StatusFailed, err.Error()
+	}
+
+	run.Fire(run.EventDone, map[string]string{run.EnvStatus: status, run.EnvMessage: message})
+
+	if err != nil {
+		fmt.Fprintln(os.Stderr, run.Red("error:"), err)
+
+		return 1
+	}
+
+	return 0
 }
 
 // addCommands builds the grouped command tree.
@@ -231,7 +262,50 @@ func reportInputs(path string, rctx *run.Ctx) {
 		parts = append(parts, "keep-going")
 	}
 
+	if rctx.MRFlag != nil {
+		parts = append(parts, "mr="+map[bool]string{true: "on", false: "off"}[*rctx.MRFlag])
+	}
+
 	fmt.Fprintln(os.Stderr, run.Dim("config: "+strings.Join(parts, ", ")))
+}
+
+// rootSwitches are the on/off flag pairs of the root, kept together so the
+// derivation into the context can run more than once: at startup, and again
+// around every flow step that carries some of them.
+type rootSwitches struct {
+	diff, noDiff   bool
+	fetch, noFetch bool
+	color, noColor bool
+	mr, noMR       bool
+}
+
+// applySwitches derives the context's overrides from the switches, refusing
+// a pair given together, and applies the colour decision process-wide.
+func applySwitches(rctx *run.Ctx, s *rootSwitches) error {
+	pairs := []struct {
+		on, off         bool
+		onName, offName string
+	}{
+		{s.diff, s.noDiff, "--diff", "--no-diff"},
+		{s.fetch, s.noFetch, "--fetch", "--no-fetch"},
+		{s.color, s.noColor, "--color", "--no-color"},
+		{s.mr, s.noMR, "--mr", "--no-mr"},
+	}
+
+	for _, p := range pairs {
+		if err := rejectBothFlags(p.on, p.off, p.onName, p.offName); err != nil {
+			return err
+		}
+	}
+
+	rctx.DiffFlag = override(s.diff, s.noDiff)
+	rctx.FetchFlag = override(s.fetch, s.noFetch)
+	rctx.ColorFlag = override(s.color, s.noColor)
+	rctx.MRFlag = override(s.mr, s.noMR)
+	run.SetColor(rctx.UseColor())
+	gitx.SetPlainOutput(!rctx.UseColor())
+
+	return nil
 }
 
 // rejectBothFlags refuses a pair of opposite switches given together: that is a

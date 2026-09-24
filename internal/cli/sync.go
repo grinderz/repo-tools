@@ -163,13 +163,10 @@ func syncProject(rctx *run.Ctx, p *config.Project, opts syncOptions) error {
 		return fmt.Errorf("origin/%s %w", p.DevBranch, errNoRemoteBranch)
 	}
 
-	clean, err := r.IsClean()
-	if err != nil {
+	// The refusal names what is in the way: a submodule sitting off its pin
+	// looks like nothing at all in a one-line message.
+	if err := requireClean(r); err != nil {
 		return err
-	}
-
-	if !clean {
-		return fmt.Errorf("%w, skipping fast-forward", errDirty)
 	}
 
 	current, err := r.CurrentBranch()
@@ -193,7 +190,14 @@ func syncProject(rctx *run.Ctx, p *config.Project, opts syncOptions) error {
 		return updateBranchRef(r, p.DevBranch)
 	}
 
-	_, err = r.Git("merge", "--ff-only", "origin/"+p.DevBranch)
+	if _, err := r.Git("merge", "--ff-only", "origin/"+p.DevBranch); err != nil {
+		return err
+	}
+
+	// A fast-forward moves the pins in the index and leaves the submodule
+	// worktrees where they were, which the next run would read as a dirty
+	// tree; the worktrees follow the pins here, as after a checkout.
+	_, err = r.Git("submodule", "update", "--init", "--recursive")
 
 	return err
 }

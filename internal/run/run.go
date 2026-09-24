@@ -41,6 +41,20 @@ type Ctx struct {
 	// NoCI skips the pipeline watch after pushes for one run, whatever the
 	// projects' ci settings say.
 	NoCI bool
+	// MRFlag overrides the config's merge_request mode when --mr or --no-mr
+	// was given.
+	MRFlag *bool
+	// Command is the invoked command with its arguments, for the hooks.
+	Command string
+	// Selection is what the last Select returned, in run order: the projects
+	// a command is working through, for the steps that look ahead — a merge
+	// request is waited for when a project still to come depends on it.
+	Selection []*config.Project
+	// ApplyFlags derives the switches above from the root's flag variables.
+	// The root runs it once the command line is parsed; a flow runs it again
+	// after each step parses the flags the step carries, and after the step
+	// once those are undone.
+	ApplyFlags func() error
 	// Aborted records that the operator declined the last plan's question.
 	// A declined command exits cleanly on its own, but a flow reads this to
 	// stop instead of carrying on to the next command as if nothing happened.
@@ -135,6 +149,7 @@ func flushTypeahead() {
 // Prompt asks for a line of input and returns it trimmed.
 func Prompt(question string) (string, error) {
 	flushTypeahead()
+	Fire(EventAsk, map[string]string{EnvMessage: plainText(question)})
 
 	// A blank line and a mark of its own: a question that follows a diff or a
 	// plan has to be findable at a glance, and answerable without scrolling
@@ -239,6 +254,8 @@ func (c *Ctx) Select(names []string) ([]*config.Project, error) {
 	if len(out) == 0 {
 		return nil, errNoProjects
 	}
+
+	c.Selection = out
 
 	return out, nil
 }
@@ -354,7 +371,12 @@ func Execute(steps []Step, stopOnError bool) error {
 
 		fmt.Printf("%s %s\n", Arrow(), Bold(s.Project.Name))
 
-		if err := s.Exec(); err != nil {
+		setProject(s.Project.Name, s.Project.Dir())
+		err := s.Exec()
+
+		setProject("", "")
+
+		if err != nil {
 			// The reason is printed here, in the project's own context; what
 			// travels up is only which project stopped the run, or the caller
 			// would print the whole thing a second time on the way out.
