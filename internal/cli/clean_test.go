@@ -146,3 +146,60 @@ func TestDirenvStateAndShell(t *testing.T) {
 		t.Error("direnv: false should disable it")
 	}
 }
+
+// An edit inside a submodule is what the checkout of the pin would refuse to
+// overwrite, and what the parent's status hides behind one modified path: it
+// has to be on the list, in the review, and gone afterwards.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
+func TestCleanProjectDiscardsEditsInsideSubmodules(t *testing.T) {
+	f := newFixture(t)
+	p := f.project(t)
+	r := gitx.Repo{Dir: f.parent}
+
+	pinBefore := subPin(t, f.parent)
+
+	writeFile(t, filepath.Join(f.parent, "sub"), "lib.txt", "edited inside the submodule\n")
+	writeFile(t, filepath.Join(f.parent, "sub"), "notes.txt", "untracked inside the submodule\n")
+
+	changed, err := dirtyFiles(r, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(changed) != 2 || !strings.Contains(changed[1], "sub/lib.txt") {
+		t.Errorf("the submodule's edit should be listed under its path: %q", changed)
+	}
+
+	withUntracked, _ := dirtyFiles(r, true)
+	if len(withUntracked) != 3 || !strings.Contains(withUntracked[2], "sub/notes.txt") {
+		t.Errorf("--untracked should list the file inside the submodule too: %q", withUntracked)
+	}
+
+	step := planClean(testCtx(), p, false)
+	if step.Skip || !strings.Contains(strings.Join(step.Plan, "\n"), "sub/lib.txt") {
+		t.Errorf("plan = %v %q", step.Plan, step.Warn)
+	}
+
+	out := captureOutput(t, func() {
+		if err := cleanProject(testCtx(), p, true); err != nil {
+			t.Errorf("clean failed: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "inside sub:") || !strings.Contains(out, "edited inside the submodule") {
+		t.Errorf("the submodule's diff should be shown under its path:\n%s", out)
+	}
+
+	if status := git(t, f.parent, "status", "--porcelain"); status != "" {
+		t.Errorf("the tree should be clean, submodule included:\n%s", status)
+	}
+
+	if inner := git(t, filepath.Join(f.parent, "sub"), "status", "--porcelain"); inner != "" {
+		t.Errorf("the submodule should be clean:\n%s", inner)
+	}
+
+	if got := subPin(t, f.parent); got != pinBefore {
+		t.Errorf("submodule pin = %s, want the recorded %s", got, pinBefore)
+	}
+}

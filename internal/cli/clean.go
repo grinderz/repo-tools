@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -90,15 +91,74 @@ func planClean(rctx *run.Ctx, p *config.Project, untracked bool) run.Step {
 	return st
 }
 
-// dirtyFiles lists the porcelain entries a clean would throw away. Untracked
-// files are only counted when they are going to be deleted.
+// dirtyFiles lists the porcelain entries a clean would throw away, the ones
+// inside submodules included, as "<submodule>/<file>". The parent's status
+// shows a submodule as one modified path whether its pin moved or a file in
+// it was edited, and the edits are what a checkout of the pin would refuse
+// to overwrite — so they have to be on the list that is shown and confirmed.
+// Untracked files are only counted when they are going to be deleted.
 func dirtyFiles(r gitx.Repo, untracked bool) ([]string, error) {
+	lines, err := r.Lines(statusArgs(untracked)...)
+	if err != nil {
+		return nil, err
+	}
+
+	paths, err := r.SubmodulePaths()
+	if err != nil {
+		return lines, nil //nolint:nilerr // no .gitmodules to speak of, nothing to descend into
+	}
+
+	for _, path := range paths {
+		sub := gitx.Repo{Dir: filepath.Join(r.Dir, path)}
+		if !sub.IsRepoRoot() {
+			continue
+		}
+
+		inner, err := dirtyFiles(sub, untracked)
+		if err != nil {
+			return nil, fmt.Errorf("submodule %s: %w", path, err)
+		}
+
+		for _, line := range inner {
+			status, file, _ := strings.Cut(line, " ")
+			lines = append(lines, status+" "+path+"/"+file)
+		}
+	}
+
+	return lines, nil
+}
+
+func statusArgs(untracked bool) []string {
 	args := []string{"status", "--porcelain"}
 	if !untracked {
 		args = append(args, "--untracked-files=no")
 	}
 
-	return r.Lines(args...)
+	return args
+}
+
+// dirtySubmodules names the submodules with changes of their own, for the
+// review to show each one's diff under its path.
+func dirtySubmodules(r gitx.Repo, untracked bool) []string {
+	paths, err := r.SubmodulePaths()
+	if err != nil {
+		return nil
+	}
+
+	var dirty []string
+
+	for _, path := range paths {
+		sub := gitx.Repo{Dir: filepath.Join(r.Dir, path)}
+		if !sub.IsRepoRoot() {
+			continue
+		}
+
+		if inner, err := sub.Lines(statusArgs(untracked)...); err == nil && len(inner) > 0 {
+			dirty = append(dirty, path)
+		}
+	}
+
+	return dirty
 }
 
 // summarizeFiles keeps a plan line to one line.
@@ -134,14 +194,21 @@ func cleanProject(rctx *run.Ctx, p *config.Project, untracked bool) error {
 		return err
 	}
 
+	// --force: a submodule's own edits go the way the parent's did, since
+	// they were on the list that was just confirmed; without it the checkout
+	// of the pin refuses to overwrite them and the clean stops half way.
+	if _, err := r.Git("submodule", "update", "--init", "--recursive", "--force"); err != nil {
+		return err
+	}
+
 	if untracked {
 		if _, err := r.Git("clean", "-fd"); err != nil {
 			return err
 		}
-	}
 
-	if _, err := r.Git("submodule", "update", "--recursive"); err != nil {
-		return err
+		if _, err := r.Git("submodule", "foreach", "--recursive", "git", "clean", "-fd"); err != nil {
+			return err
+		}
 	}
 
 	fmt.Println("    " + run.Green("clean"))
@@ -170,6 +237,20 @@ func reviewDiscard(rctx *run.Ctx, r gitx.Repo, label string, untracked bool) (bo
 	}
 
 	printCapped(rctx, diff, "git -C "+r.Dir+" diff HEAD "+submoduleLog)
+
+	// A submodule's own edits are invisible in the parent's diff, which only
+	// says the submodule changed; each one gets its diff under its path.
+	for _, path := range dirtySubmodules(r, untracked) {
+		sub := gitx.Repo{Dir: filepath.Join(r.Dir, path)}
+
+		inner, err := sub.Git("diff", "HEAD", colorArg())
+		if err != nil {
+			return false, fmt.Errorf("submodule %s: %w", path, err)
+		}
+
+		fmt.Printf("\ninside %s:\n", run.Bold(path))
+		printCapped(rctx, inner, "git -C "+sub.Dir+" diff HEAD")
+	}
 
 	if !rctx.Interactive() {
 		return true, nil

@@ -709,7 +709,11 @@ fact that exists, so an untagged line reports its branch instead of a dash.
 Without a `report` list the table is project | branch | commit.
 
 `rt repo clean` resets the working tree to HEAD and puts every submodule back
-on its recorded pin. That is what clears the leftovers of a run that stopped
+on its recorded pin, edits inside a submodule included: the parent's status
+shows those as one modified path, so they are listed and shown under the
+submodule's path (`inside .dev-include:`) before the question, and then
+discarded along with the rest — a checkout of the pin would otherwise refuse
+to overwrite them and stop the clean half way. That is what clears the leftovers of a run that stopped
 half way — the state every committing command refuses to start on. Tracked
 files only, unless `--untracked` also deletes what git does not know about;
 untracked files count as dirty too, so a run blocked by them needs that flag.
