@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"path/filepath"
 	"regexp"
 	"strings"
 
@@ -17,6 +18,17 @@ const cherryFields = 2
 
 // noEditorEnv keeps git from opening an editor on --continue.
 func noEditorEnv() []string { return []string{"GIT_EDITOR=true"} }
+
+// noCommitGraph turns the commit-graph off for one git command. A merge that
+// touches a gitlink opens the submodule's repository in-process to merge the
+// pins, and git 2.56 trips over the submodule's commit-graph there: "invalid
+// commit position. commit-graph is likely corrupt", on a graph that verifies
+// fine — the layer auto-gc writes after a fetch is enough. Without the
+// graph the merge reads the commits from the objects and reports the
+// conflict the usual way, which is what the resolution here expects.
+func noCommitGraph(args ...string) []string {
+	return append([]string{"-c", "core.commitGraph=false"}, args...)
+}
 
 func newCherryPickCmd(rctx *run.Ctx, name string) *cobra.Command {
 	var (
@@ -117,14 +129,21 @@ func runCherryPick(rctx *run.Ctx, name string, args []string, releaseBranch stri
 		return err
 	}
 
+	plan := []string{
+		"checkout " + planRef(branch),
+		"cherry-pick -x " + strings.Join(resolved, " "),
+		pushPlanLine(rctx, p, branch),
+	}
+
+	if leftover := leftoverPicks(r, branch, resolved); len(leftover) > 0 {
+		plan = append(plan, fmt.Sprintf("%d of these %s already on local %s from an earlier run, kept as is",
+			len(leftover), plural(len(leftover), "is", "are"), branch))
+	}
+
 	steps := []run.Step{{
 		Project: p,
-		Plan: []string{
-			"checkout " + planRef(branch),
-			"cherry-pick -x " + strings.Join(resolved, " "),
-			pushPlanLine(rctx, p, branch),
-		},
-		Exec: func() error { return cherryPick(rctx, p, branch, resolved) },
+		Plan:    plan,
+		Exec:    func() error { return cherryPick(rctx, p, branch, resolved) },
 	}}
 
 	ok, err := rctx.Gate(name, run.Destructive, steps)
@@ -291,6 +310,51 @@ func alreadyInBranch(r gitx.Repo, branch, sha string, picked map[string]bool) st
 
 var pickedFromRe = regexp.MustCompile(`cherry picked from commit ([0-9a-f]{7,40})`)
 
+// leftoverPicks is the set of shas an earlier run already picked onto the
+// local branch and never pushed: the commits ahead of origin, when every one
+// of them is a cherry-pick -x of one of the shas. One commit ahead that is
+// anything else — a hand-made fix, a pick of something not selected — makes
+// the set empty, and the usual unpushed-work refusal applies.
+func leftoverPicks(r gitx.Repo, branch string, shas []string) map[string]bool {
+	if !r.LocalBranchExists(branch) || !r.RemoteBranchExists(branch) {
+		return nil
+	}
+
+	selected := make(map[string]bool, len(shas))
+	for _, sha := range shas {
+		selected[sha] = true
+	}
+
+	out, err := r.Git("log", "--no-merges", "-z", "--format=%H"+fieldSep+"%B", "origin/"+branch+".."+branch)
+	if err != nil || strings.TrimSpace(out) == "" {
+		return nil
+	}
+
+	leftover := map[string]bool{}
+
+	for record := range strings.SplitSeq(out, "\x00") {
+		_, body, ok := strings.Cut(record, fieldSep)
+		if !ok {
+			continue
+		}
+
+		sources := pickedFromRe.FindAllStringSubmatch(body, -1)
+		if len(sources) == 0 {
+			return nil
+		}
+
+		for _, m := range sources {
+			if !selected[m[1]] {
+				return nil
+			}
+
+			leftover[m[1]] = true
+		}
+	}
+
+	return leftover
+}
+
 // alreadyPicked collects source hashes recorded by cherry-pick -x in branch.
 func alreadyPicked(r gitx.Repo, p *config.Project, branch string) (map[string]bool, error) {
 	pairs, err := pickedPairs(r, p, branch)
@@ -421,11 +485,28 @@ func cherryPick(rctx *run.Ctx, p *config.Project, branch string, shas []string) 
 		return err
 	}
 
-	if err := checkoutTracking(r, branch); err != nil {
+	if err := checkoutBranch(r, branch); err != nil {
 		return err
 	}
 
+	// A run that stopped between the picks and the push left its picks on
+	// the local branch. They are what this run would make again, so they are
+	// kept and the rest picked on top; anything else ahead of origin is
+	// refused the usual way.
+	leftover := leftoverPicks(r, branch, shas)
+	if len(leftover) == 0 {
+		if err := requirePushed(r, branch); err != nil {
+			return err
+		}
+	}
+
 	for _, sha := range shas {
+		if leftover[sha] {
+			fmt.Printf("    %s already picked in an earlier run, kept\n", planHash(shorten(sha, shortSHALen)))
+
+			continue
+		}
+
 		if err := pickOne(rctx, r, p, branch, sha); err != nil {
 			return err
 		}
@@ -462,17 +543,17 @@ func cherryPick(rctx *run.Ctx, p *config.Project, branch string, shas []string) 
 func pickOne(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, sha string) error {
 	short := shorten(sha, shortSHALen)
 
-	out, err := r.Git("cherry-pick", "-x", sha)
+	out, err := r.Git(noCommitGraph("cherry-pick", "-x", sha)...)
 	if err == nil {
 		fmt.Printf("    picked %s\n", planHash(short))
 
-		return nil
+		return repinStrays(rctx, r, p, short)
 	}
 
 	if isEmptyPick(out) {
 		fmt.Printf("    %s %s is already in %s, skipping\n", run.Warn(), short, branch)
 
-		_, skipErr := r.Git("cherry-pick", "--skip")
+		_, skipErr := r.Git(noCommitGraph("cherry-pick", "--skip")...)
 
 		return skipErr
 	}
@@ -481,12 +562,12 @@ func pickOne(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, sha string) 
 		return err
 	}
 
-	cont, contErr := r.GitEnv(noEditorEnv(), "cherry-pick", "--continue")
+	cont, contErr := r.GitEnv(noEditorEnv(), noCommitGraph("cherry-pick", "--continue")...)
 	if contErr != nil {
 		if isEmptyPick(cont) {
 			fmt.Printf("    %s %s became empty after resolving, skipping\n", run.Warn(), short)
 
-			_, skipErr := r.Git("cherry-pick", "--skip")
+			_, skipErr := r.Git(noCommitGraph("cherry-pick", "--skip")...)
 
 			return skipErr
 		}
@@ -496,7 +577,109 @@ func pickOne(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, sha string) 
 
 	fmt.Printf("    picked %s (submodule pins resolved from the release freeze)\n", planHash(short))
 
-	return nil
+	return repinStrays(rctx, r, p, short)
+}
+
+// repinStrays keeps the release freeze on the pins a pick moved without a
+// conflict. git merges a gitlink by fast-forward when the release pin is an
+// ancestor of the dev pin — the usual case right after a freeze, when the
+// two branches still share the pin — so a dev bump lands on the release
+// branch and carries the submodule onto its dev branch, silently. Every pin
+// the pick changed is checked against the branch .gitmodules tracks, and a
+// pin off that branch is moved to its head and the pick amended — or
+// dropped, when moving the pins back is all that was left of it: a dev
+// commit that only bumped the pins has nothing to say on the release branch.
+func repinStrays(rctx *run.Ctx, r gitx.Repo, p *config.Project, short string) error {
+	smPaths, err := r.SubmodulePaths()
+	if err != nil {
+		return nil //nolint:nilerr // no .gitmodules, so no pins to keep
+	}
+
+	changed, err := r.Lines("diff", "--name-only", "HEAD~1", "HEAD", "--", ".")
+	if err != nil {
+		return err
+	}
+
+	isChanged := make(map[string]bool, len(changed))
+	for _, path := range changed {
+		isChanged[path] = true
+	}
+
+	strays := 0
+
+	for _, path := range smPaths {
+		if !isChanged[path] {
+			continue
+		}
+
+		stray, err := pinOffBranch(rctx, r, p, path)
+		if err != nil {
+			return err
+		}
+
+		if !stray {
+			continue
+		}
+
+		if err := repinSubmodule(rctx, r, p, path); err != nil {
+			return err
+		}
+
+		strays++
+	}
+
+	if strays == 0 {
+		return nil
+	}
+
+	// Nothing left once the pins are back where they were: the pick would
+	// amend to an empty commit, and a release branch has no use for one.
+	if _, err := r.Git("diff", "--cached", "--quiet", "HEAD~1"); err == nil {
+		fmt.Printf("    %s %s only moved submodule pins off the freeze, nothing left to pick, dropped\n",
+			run.Warn(), short)
+
+		_, err := r.Git("reset", "--quiet", "--hard", "HEAD~1")
+
+		return err
+	}
+
+	_, err = r.GitEnv(noEditorEnv(), "commit", "--amend", "--no-edit")
+
+	return err
+}
+
+// pinOffBranch says whether the pin HEAD records for path is not on the
+// branch .gitmodules tracks for it. A submodule that tracks no branch, or
+// whose clone is not here, is nobody's to judge.
+func pinOffBranch(rctx *run.Ctx, r gitx.Repo, p *config.Project, path string) (bool, error) {
+	branch, err := r.SubmoduleBranch(path)
+	if err != nil || branch == "" {
+		return false, nil //nolint:nilerr // an untracked submodule is left where the pick put it
+	}
+
+	sub := gitx.Repo{Dir: filepath.Join(r.Dir, path)}
+	if !sub.IsRepoRoot() {
+		return false, nil
+	}
+
+	pin, err := r.Git("rev-parse", "HEAD:"+path)
+	if err != nil {
+		return false, err
+	}
+
+	if rctx.WantFetchFor(p, true) {
+		if _, err := sub.Git("fetch", "--prune", "origin"); err != nil {
+			return false, fmt.Errorf("submodule %s: %w origin: %w", path, errCannotFetch, briefError{err})
+		}
+	}
+
+	if !sub.RemoteBranchExists(branch) {
+		return false, fmt.Errorf("submodule %s: origin/%s %w", path, branch, errNoRemoteBranch)
+	}
+
+	_, err = sub.Git("merge-base", "--is-ancestor", pin, "origin/"+branch)
+
+	return err != nil, nil
 }
 
 func isEmptyPick(out string) bool {

@@ -39,7 +39,8 @@ func newSubmodulesCmd(rctx *run.Ctx, name string) *cobra.Command {
 			"runs the project's deps commands, then commits and pushes. Unlike deps\n" +
 			"freeze it rewrites no branch names in .gitmodules: whatever a submodule\n" +
 			"already tracks is what it is moved along.\n\n" +
-			"Works on the dev branch unless --branch says otherwise. A submodule\n" +
+			"Works on the target branch — the release branch when the config names\n" +
+			"one, the dev branch otherwise — unless --branch says so. A submodule\n" +
 			"without a branch in .gitmodules is skipped, since --remote would\n" +
 			"otherwise follow the remote's default branch.",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -82,7 +83,7 @@ func newSubmodulesCmd(rctx *run.Ctx, name string) *cobra.Command {
 		&opts.Branch,
 		varBranch,
 		"",
-		"branch to update the submodules on (default: dev_branch)",
+		"branch to update the submodules on (default: release_branch, else dev_branch)",
 	)
 	c.Flags().StringSliceVar(
 		&opts.Only,
@@ -117,9 +118,12 @@ func planSubmodules(rctx *run.Ctx, p *config.Project, opts submodulesOpts) (run.
 		return st, 0, fetchFailed(err)
 	}
 
+	// The target branch, like every other deps command: the release branch
+	// in a release config, the dev branch otherwise. Moving the dev pins on
+	// develop from a release config was never what anyone asked for.
 	branch := opts.Branch
 	if branch == "" {
-		branch = p.DevBranch
+		branch = p.TargetBranch()
 	}
 
 	targets, untracked, err := configuredSubmodules(rctx, r, p, branchRef(r, branch), opts.Only)

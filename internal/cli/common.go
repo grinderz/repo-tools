@@ -624,8 +624,19 @@ func pendingRelease(branch string) error {
 }
 
 // checkoutTracking checks out branch, creating a local tracking branch when
-// it only exists on origin, and fast-forwards it to origin.
+// it only exists on origin, fast-forwards it to origin and refuses local
+// commits origin does not have.
 func checkoutTracking(r gitx.Repo, branch string) error {
+	if err := checkoutBranch(r, branch); err != nil {
+		return err
+	}
+
+	return requirePushed(r, branch)
+}
+
+// checkoutBranch is the checkout and the fast-forward of checkoutTracking,
+// for a caller that has its own view of the commits ahead of origin.
+func checkoutBranch(r gitx.Repo, branch string) error {
 	switch {
 	case r.LocalBranchExists(branch):
 		if _, err := r.Git("checkout", branch); err != nil {
@@ -647,8 +658,17 @@ func checkoutTracking(r gitx.Repo, branch string) error {
 		return fmt.Errorf("cannot fast-forward %s to origin: %w", branch, err)
 	}
 
-	// Committing on top of unpushed local work would push that work too, which
-	// is never what a batch command was asked to do.
+	return nil
+}
+
+// requirePushed refuses a branch with local commits origin does not have:
+// committing on top of unpushed local work would push that work too, which
+// is never what a batch command was asked to do.
+func requirePushed(r gitx.Repo, branch string) error {
+	if !r.RemoteBranchExists(branch) {
+		return nil
+	}
+
 	ahead, _, err := r.AheadBehind("origin/" + branch)
 	if err != nil {
 		return err

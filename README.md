@@ -673,6 +673,14 @@ the changes are named (`working tree is dirty: app.py, notes.md; commit or
 run repo clean first`), and a branch left behind with commits origin does
 not have is pointed out too. Nothing is stashed or carried across.
 
+A run that stops between the picks and the push — a conflict nobody could
+resolve, a declined review, a crash — leaves its picks on the local release
+branch. The next `git cherry-pick` recognises them: when every commit ahead
+of origin is a `-x` pick of one of the commits selected this time, they are
+kept, the rest are picked on top and everything is pushed together; the plan
+says how many are being kept. Anything else ahead of origin is refused as
+usual, since a batch command must not push work it was not asked to.
+
 `rt repo prune` deletes, per project, the local branches nothing would miss:
 branches whose upstream is gone from origin but whose commits some remote
 branch still carries, and local release branches sitting at or behind their
@@ -885,15 +893,17 @@ Moves the project's configured submodules to the head of the branch
 lock file follows the new pin, then commits and pushes. It is the everyday
 counterpart of `deps freeze`: freeze decides *which* branch a submodule
 follows and is a release act, this one only follows it further and works on
-the dev branch. The scope is the same as freeze's — the `submodules` the
+the target branch — the release branch when the config names one, the dev
+branch otherwise, so a release config moves the frozen pins along their
+release branches. The scope is the same as freeze's — the `submodules` the
 project lists, or without a list every submodule another configured project
 provides — so a repository the project merely carries, a dashboard bundle or
 a vendored service that tracks a branch of its own, is never moved.
 
 ```sh
-rt deps submodules                          # every project, on its dev branch
+rt deps submodules                          # every project, on its target branch
 rt deps submodules api worker               # only these
-rt deps submodules --branch release-1.5     # somewhere other than the dev branch
+rt deps submodules --branch release-1.5     # somewhere other than the target branch
 rt deps submodules --submodule pylib        # only this submodule path
 rt deps submodules --no-deps                # move the pins, run no deps commands
 rt deps submodules --no-commit              # update the working tree, commit nothing
@@ -1027,7 +1037,12 @@ described above. Conflicts are handled as follows:
 
 - **submodule pin** — the develop pin is ignored and the submodule is re-pinned
   to the head of the branch it tracks in the release branch's `.gitmodules`,
-  which is where `rt deps freeze` left it.
+  which is where `rt deps freeze` left it. The same holds when there is no
+  conflict at all: right after a freeze the release branch and develop still
+  share a pin, so a dev bump of it merges by fast-forward and would carry the
+  submodule onto its dev branch silently. Every pin a pick changed is checked
+  against the tracked branch, and one off it is moved to the branch head and
+  the pick amended — reported the same way.
 - **`.gitmodules` itself** — the release version wins, so a develop commit that
   retargets a submodule cannot unfreeze the release.
 - **a submodule with no `branch` in `.gitmodules`** — the run stops, because

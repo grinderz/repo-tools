@@ -327,7 +327,7 @@ func checkoutForRebase(r gitx.Repo, branch string) error {
 // aborts the rebase — or, on a terminal, may be left in progress for a hand
 // that already has the submodule pins resolved for free.
 func rebaseLoop(rctx *run.Ctx, r gitx.Repo, source, targetRef string) error {
-	out, err := r.Git("rebase", targetRef)
+	out, err := r.Git(noCommitGraph("rebase", targetRef)...)
 	if err == nil {
 		fmt.Println("    " + run.Green("rebase finished") + ", no conflicts")
 
@@ -350,7 +350,7 @@ func rebaseLoop(rctx *run.Ctx, r gitx.Repo, source, targetRef string) error {
 			}
 		}
 
-		if cont, err := r.GitEnv(noEditorEnv(), "rebase", "--continue"); err != nil {
+		if cont, err := r.GitEnv(noEditorEnv(), noCommitGraph("rebase", "--continue")...); err != nil {
 			// Skip only a provably empty commit; anything else is unexpected.
 			if !stagedEmpty(r) {
 				return abortRebase(
@@ -359,7 +359,7 @@ func rebaseLoop(rctx *run.Ctx, r gitx.Repo, source, targetRef string) error {
 				)
 			}
 
-			if _, err := r.GitEnv(noEditorEnv(), "rebase", "--skip"); err != nil {
+			if _, err := r.GitEnv(noEditorEnv(), noCommitGraph("rebase", "--skip")...); err != nil {
 				return abortRebase(r, fmt.Errorf("unable to continue the rebase: %w", err))
 			}
 

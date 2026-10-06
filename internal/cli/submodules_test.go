@@ -590,3 +590,30 @@ func TestUpdateSubmoduleRemoteFollowsNestedPins(t *testing.T) {
 		t.Errorf("mid must be clean inside:\n%s", out)
 	}
 }
+
+// Without --branch the submodules move on the target branch, like every
+// other deps command: the release branch when the config names one.
+func TestPlanSubmodulesUsesTheReleaseBranchWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	onDevelop(t, f)
+	publishOrigin(t, f.parent, "develop", "release-1.0")
+
+	p := f.project(t)
+	p.ReleaseBranch = "release-1.0"
+
+	step, _, _ := planSubmodules(ctxFor(p), p, submodulesOpts{})
+	if step.Skip {
+		t.Fatalf("step was skipped: %s", step.Warn)
+	}
+
+	plan := strings.Join(step.Plan, "\n")
+	if !strings.Contains(plan, "checkout release-1.0") || !strings.Contains(plan, "head of release-1.0") {
+		t.Errorf("the release branch and its frozen pin should be the target:\n%s", plan)
+	}
+
+	if !strings.Contains(plan, "origin/release-1.0") {
+		t.Errorf("the push should go to the release branch:\n%s", plan)
+	}
+}

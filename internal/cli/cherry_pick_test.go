@@ -668,3 +668,171 @@ func TestCheckoutTrackingRefusesUnpushedWork(t *testing.T) {
 		t.Errorf("unclear error: %v", err)
 	}
 }
+
+// A run that stopped between the picks and the push leaves its picks on the
+// local release branch. The next run keeps them, picks the rest on top and
+// pushes everything; a local commit that is not one of its picks is still
+// refused.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
+func TestCherryPickResumesItsOwnLeftoverPicks(t *testing.T) {
+	f := newFixture(t)
+	p := f.project(t)
+	r := gitx.Repo{Dir: f.parent}
+
+	// Two dev commits to pick, and a bare origin to push to.
+	git(t, f.parent, "checkout", "--quiet", "develop")
+	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
+	writeFile(t, f.parent, "one.txt", "one\n")
+	first := commit(t, f.parent, "feat/AB-1: one")
+	writeFile(t, f.parent, "two.txt", "two\n")
+	second := commit(t, f.parent, "feat/AB-2: two")
+
+	bare := filepath.Join(t.TempDir(), "parent.git")
+	git(t, f.parent, "clone", "--bare", "--quiet", f.parent, bare)
+	git(t, f.parent, "remote", "add", "origin", bare)
+	git(t, f.parent, "fetch", "--quiet", "origin")
+
+	// The earlier run: the first pick landed, the push never happened.
+	git(t, f.parent, "checkout", "--quiet", "release-1.0")
+	git(t, f.parent, "submodule", "update", "--quiet", "--", "sub")
+	git(t, f.parent, "cherry-pick", "-x", first)
+
+	if got := leftoverPicks(r, "release-1.0", []string{first, second}); !got[first] || got[second] {
+		t.Fatalf("leftover = %v, want only the first", got)
+	}
+
+	// Not selected this time: the commit ahead is unexplained, no resume.
+	if got := leftoverPicks(r, "release-1.0", []string{second}); got != nil {
+		t.Fatalf("an unselected pick must not count as a leftover: %v", got)
+	}
+
+	out := captureOutput(t, func() {
+		if err := cherryPick(testCtx(), p, "release-1.0", []string{first, second}); err != nil {
+			t.Errorf("the rerun should resume: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "already picked in an earlier run, kept") {
+		t.Errorf("the leftover should be reported:\n%s", out)
+	}
+
+	subjects := git(t, f.parent, "log", "--format=%s", "origin/release-1.0", "-3")
+	if strings.Count(subjects, "feat/AB-1: one") != 1 || !strings.Contains(subjects, "feat/AB-2: two") {
+		t.Errorf("origin/release-1.0 should carry each pick once:\n%s", subjects)
+	}
+
+	if ahead, _, _ := r.AheadBehind("origin/release-1.0"); ahead != 0 {
+		t.Errorf("everything should be pushed, %d ahead", ahead)
+	}
+
+	// A hand-made commit ahead of origin is not a leftover pick.
+	writeFile(t, f.parent, "hand.txt", "by hand\n")
+	commit(t, f.parent, "parent: by hand")
+
+	err := cherryPick(testCtx(), p, "release-1.0", []string{second})
+	if err == nil || !strings.Contains(err.Error(), "not on origin") {
+		t.Errorf("unrelated local work must still be refused, got %v", err)
+	}
+}
+
+// Right after a freeze the release branch and develop still share a pin, so
+// a dev bump of it merges by fast-forward — no conflict, and the submodule
+// quietly lands on its dev branch. The pick has to move it back onto the
+// branch .gitmodules tracks.
+func TestCherryPickRepinsAFastForwardedPin(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	p := f.project(t)
+	r := gitx.Repo{Dir: f.parent}
+
+	// release-1.0 tracks the submodule's release-1.0 but, as right after a
+	// freeze, still pins the same commit develop does.
+	git(t, f.parent, "checkout", "--quiet", "release-1.0")
+	git(t, filepath.Join(f.parent, "sub"), "checkout", "--quiet", "--detach", f.subDevelop)
+	git(t, f.parent, "add", "sub")
+	commit(t, f.parent, "parent: release still on the shared pin")
+
+	// develop bumps the submodule further along its develop.
+	writeFile(t, f.sub, "lib2.txt", "v3\n")
+	subBump := commit(t, f.sub, "sub: further develop work")
+	git(t, f.parent, "checkout", "--quiet", "develop")
+	git(t, f.parent, "submodule", "update", "--remote", "--", "sub")
+	writeFile(t, f.parent, "app.txt", "app v2\n")
+	devCommit := commit(t, f.parent, "parent: feature plus submodule bump")
+
+	git(t, f.parent, "checkout", "--quiet", "release-1.0")
+	git(t, f.parent, "submodule", "update", "--", "sub")
+
+	if err := pickOne(testCtx(), r, p, "release-1.0", devCommit); err != nil {
+		t.Fatalf("pick failed: %v", err)
+	}
+
+	if got := subPin(t, f.parent); got != f.subRelease {
+		t.Errorf("submodule pin = %s, want the release head %s (the pick carried %s)", got, f.subRelease, subBump)
+	}
+
+	msg := git(t, f.parent, "log", "-1", "--format=%B")
+	if !strings.Contains(msg, "cherry picked from commit "+devCommit) {
+		t.Errorf("the amended pick lost the -x trailer:\n%s", msg)
+	}
+
+	if n := git(t, f.parent, "rev-list", "--count", "release-1.0~1..release-1.0"); n != "1" {
+		t.Errorf("the re-pin must amend the pick, not add a commit: %s", n)
+	}
+
+	if out := git(t, f.parent, "status", "--porcelain"); out != "" {
+		t.Errorf("working tree not clean after the pick:\n%s", out)
+	}
+}
+
+// A dev commit that only bumped a pin has nothing to say on the release
+// branch once the pin is back on its frozen branch: the pick is dropped
+// rather than amended into an empty commit.
+//
+//nolint:paralleltest // captures os.Stdout, which is process-wide
+func TestCherryPickDropsAPickThatOnlyMovedPinsOffTheFreeze(t *testing.T) {
+	f := newFixture(t)
+	p := f.project(t)
+	r := gitx.Repo{Dir: f.parent}
+
+	// develop and release-1.0 share the pin, and it is the head of the
+	// branch release-1.0 tracks — the state right after a freeze.
+	before := git(t, f.parent, "rev-parse", "release-1.0")
+
+	git(t, f.parent, "checkout", "--quiet", "develop")
+	git(t, filepath.Join(f.parent, "sub"), "checkout", "--quiet", "--detach", f.subRelease)
+	git(t, f.parent, "add", "sub")
+	commit(t, f.parent, "parent: develop on the shared pin")
+
+	writeFile(t, f.sub, "lib2.txt", "v3\n")
+	commit(t, f.sub, "sub: further develop work")
+	git(t, f.parent, "submodule", "update", "--remote", "--", "sub")
+	bumpOnly := commit(t, f.parent, "parent: submodule bump only")
+
+	git(t, f.parent, "checkout", "--quiet", "release-1.0")
+	git(t, f.parent, "submodule", "update", "--", "sub")
+
+	out := captureOutput(t, func() {
+		if err := pickOne(testCtx(), r, p, "release-1.0", bumpOnly); err != nil {
+			t.Errorf("pick failed: %v", err)
+		}
+	})
+
+	if !strings.Contains(out, "nothing left to pick, dropped") {
+		t.Errorf("the drop should be reported:\n%s", out)
+	}
+
+	if got := git(t, f.parent, "rev-parse", "HEAD"); got != before {
+		t.Errorf("HEAD moved to %s, want the pick dropped (%s)", got, before)
+	}
+
+	if got := subPin(t, f.parent); got != f.subRelease {
+		t.Errorf("submodule pin = %s, want the release's own %s", got, f.subRelease)
+	}
+
+	if status := git(t, f.parent, "status", "--porcelain"); status != "" {
+		t.Errorf("working tree not clean:\n%s", status)
+	}
+}
