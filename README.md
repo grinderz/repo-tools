@@ -37,11 +37,17 @@ project list and remote URLs. The config is looked up in this order:
 `--config/-c`, `$REPO_TOOLS_CONFIG`, `./config.yaml`,
 `~/.config/repo-tools/config.yaml`.
 
-The checkout ships an `.envrc` that points `$REPO_TOOLS_CONFIG` at its
-`config.yaml`, so `rt` finds it from any directory once
-[direnv](https://direnv.net) has allowed it. A release config is selected for
-one command with `-c`, for one shell with the environment variable, or for the
-whole checkout by putting the export in `.envrc.local` (gitignored).
+The real configs do not live in the checkout: they sit in a directory
+syncthing carries between the machines, which the dotfiles link as
+`~/.config/repo-tools`, with `config.yaml` there a symlink to the current
+release config (`config-<product version>.yaml`), so `rt` finds it from any
+directory on every machine. A new release cycle is a new `config-<product
+version>.yaml` next to the others and the symlink moved once,
+`ln -sfn config-2026.08.yaml ~/.config/repo-tools/config.yaml`; syncthing
+carries both to the other machine. A release config is selected for one command
+with `-c`, for one shell with the environment variable, or for the whole
+checkout by putting the export in `.envrc.local` (gitignored, read by the
+shipped `.envrc` through [direnv](https://direnv.net)).
 
 ```yaml
 projects_dir: ~/src/projects
