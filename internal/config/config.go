@@ -98,6 +98,7 @@ type Defaults struct {
 	DepsFreeze          *bool  `yaml:"deps_freeze"`
 	ReleaseTags         *bool  `yaml:"release_tags"`
 	Fetch               *bool  `yaml:"fetch"`
+	Renovate            *bool  `yaml:"renovate"`
 	ReleaseBranchPrefix string `yaml:"release_branch_prefix"`
 }
 
@@ -135,6 +136,17 @@ type Project struct {
 	// Unlike the other toggles it defaults to on: a library that is consumed
 	// by branch rather than by version sets it to false.
 	ReleaseTags *bool `yaml:"release_tags"`
+	// Renovate lets deps renovate include the project; nil means yes.
+	Renovate *bool `yaml:"renovate"`
+	// Toolchain overrides the global versions entry by entry, for a project
+	// that stays behind on purpose.
+	Toolchain map[string]string `yaml:"toolchain"`
+	// ToolchainCommitMessage replaces the global one: a public repository
+	// does not want the work ticket in its history.
+	ToolchainCommitMessage string `yaml:"toolchain_commit_message"`
+	// Pins are the project's own version lines, on top of the global pins
+	// that apply to it.
+	Pins []Pin `yaml:"pins"`
 	// ReleaseBranch names the release branch this config works with, for a
 	// config that describes one release. It need not exist yet: release branch
 	// creates exactly it. Empty means "the highest release branch on origin".
@@ -174,13 +186,21 @@ type Cmds struct {
 	Changelog []string            `yaml:"changelog"`
 	Deps      map[string][]string `yaml:"deps"`
 	DepsCheck map[string][]string `yaml:"deps_check"`
+	// Toolchain puts a project on the versions the toolchain block names,
+	// per deps kind; ToolchainCheck says, read-only, whether it is there.
+	Toolchain      map[string][]string `yaml:"toolchain"`
+	ToolchainCheck map[string][]string `yaml:"toolchain_check"`
 }
 
 // ProjectCmds are one project's own lists, each replacing the global one.
+// The toolchain lists are keyed by kind like the global ones, so a project
+// can carry commands for a kind that is not its deps kind.
 type ProjectCmds struct {
-	Changelog []string `yaml:"changelog"`
-	Deps      []string `yaml:"deps"`
-	DepsCheck []string `yaml:"deps_check"`
+	Changelog      []string            `yaml:"changelog"`
+	Deps           []string            `yaml:"deps"`
+	DepsCheck      []string            `yaml:"deps_check"`
+	Toolchain      map[string][]string `yaml:"toolchain"`
+	ToolchainCheck map[string][]string `yaml:"toolchain_check"`
 }
 
 // MergeRequest shapes the merge request a commit goes through when a
@@ -260,6 +280,9 @@ func (m *MergeRequest) applyDefaults() error {
 	}
 }
 
+// Config is one config file as rt reads it. extends, the config a file
+// builds on, is taken out by the loader before the merged document is
+// read, so there is no field for it.
 type Config struct {
 	ProjectsDir string `yaml:"projects_dir"`
 	// ProductVersion names the release the whole set of projects belongs to,
@@ -362,6 +385,20 @@ type Config struct {
 	// MergeRequest is the branch and title of the requests the committing
 	// commands open for the projects whose mr says so.
 	MergeRequest MergeRequest `yaml:"merge_request"`
+
+	// Renovate is how deps renovate runs Renovate over the projects.
+	Renovate Renovate `yaml:"renovate"`
+
+	// Toolchain is the language and tool versions the projects should be on,
+	// keyed by whatever names the cmds.toolchain commands use as {key} and
+	// {key_minor}; deps toolchain brings the projects there.
+	Toolchain map[string]string `yaml:"toolchain"`
+	// ToolchainCommitMessage is the commit deps toolchain makes, with the
+	// same placeholders.
+	ToolchainCommitMessage string `yaml:"toolchain_commit_message"`
+	// Pins are the version lines deps toolchain writes and deps check reads,
+	// in every project that has the file (and is of the pin's kinds).
+	Pins []Pin `yaml:"pins"`
 
 	// NotesHeader and NotesSectionTitle shape the release notes document:
 	// the first line of the whole document, and the heading of each
@@ -586,6 +623,15 @@ func (p *Project) Dir() string { return p.dir }
 // ChangelogEnabled reports whether changelog update should run for this project.
 func (p *Project) ChangelogEnabled() bool { return p.Changelog != nil && *p.Changelog }
 
+// RenovateEnabled reports whether deps renovate includes the project: on
+// unless the project or the defaults say renovate: false.
+func (p *Project) RenovateEnabled() bool { return p.Renovate == nil || *p.Renovate }
+
+// RenovateRequired reports whether the project said renovate: true, itself
+// or through the defaults: then a missing renovate config is a finding for
+// repo check, not just a quiet skip in deps renovate.
+func (p *Project) RenovateRequired() bool { return p.Renovate != nil && *p.Renovate }
+
 // DepsFreezeEnabled reports whether deps freeze should run for this project.
 func (p *Project) DepsFreezeEnabled() bool { return p.DepsFreeze != nil && *p.DepsFreeze }
 
@@ -629,9 +675,9 @@ func expandHome(path string) string {
 }
 
 func Load(path string) (*Config, error) {
-	data, err := os.ReadFile(path)
+	data, err := Document(path)
 	if err != nil {
-		return nil, fmt.Errorf("read config: %w", err)
+		return nil, err
 	}
 
 	var cfg Config
@@ -684,6 +730,15 @@ func quotingHint(err error) string {
 		`submodules_commit_message: "chore(deps): update submodules on {branch}")`
 }
 
+// applyCommitMessageDefaults fills in the commit messages a config leaves
+// out. [skip ci] keeps the changelog commit out of the next changelog and off
+// the CI pipeline, the way the CI job writes it.
+func (c *Config) applyCommitMessageDefaults() {
+	c.ChangelogCommitMessage = firstNonEmpty(c.ChangelogCommitMessage, "chore(changelog): update changelog [skip ci]")
+	c.FreezeCommitMessage = firstNonEmpty(c.FreezeCommitMessage, "chore(deps): freeze dependencies for {branch}")
+	c.SubmodulesCommitMessage = firstNonEmpty(c.SubmodulesCommitMessage, "chore(deps): update submodules on {branch}")
+}
+
 func (c *Config) applyDefaults() error {
 	// Asking about everything is the safe default; a config that knows better
 	// says so, and CI says never.
@@ -705,21 +760,13 @@ func (c *Config) applyDefaults() error {
 		c.ReleaseTagMessage = "release {version}"
 	}
 
-	// [skip ci] keeps the changelog commit out of the next changelog and off
-	// the CI pipeline, the way the CI job writes it.
-	if c.ChangelogCommitMessage == "" {
-		c.ChangelogCommitMessage = "chore(changelog): update changelog [skip ci]"
-	}
-
-	if c.FreezeCommitMessage == "" {
-		c.FreezeCommitMessage = "chore(deps): freeze dependencies for {branch}"
-	}
-
-	if c.SubmodulesCommitMessage == "" {
-		c.SubmodulesCommitMessage = "chore(deps): update submodules on {branch}"
-	}
+	c.applyCommitMessageDefaults()
 
 	if err := c.MergeRequest.applyDefaults(); err != nil {
+		return err
+	}
+
+	if err := c.applyToolingDefaults(); err != nil {
 		return err
 	}
 
@@ -944,6 +991,10 @@ func (c *Config) applyProjectDefaults(p *Project) {
 	if p.Fetch == nil {
 		p.Fetch = def.Fetch
 	}
+
+	if p.Renovate == nil {
+		p.Renovate = def.Renovate
+	}
 }
 
 func firstNonEmpty(values ...string) string {
@@ -965,6 +1016,10 @@ func (c *Config) prepareProject(p *Project) error {
 	c.applyProjectDefaults(p)
 
 	if err := p.rejectLegacyCmds(); err != nil {
+		return err
+	}
+
+	if err := c.validateProjectToolchain(p); err != nil {
 		return err
 	}
 

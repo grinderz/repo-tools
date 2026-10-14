@@ -73,6 +73,9 @@ cmds:                         # the shell commands the projects run
       - "uv lock --check"
     go:
       - "go mod tidy -diff"
+  toolchain:                  # after the pins, per deps kind, see deps toolchain
+    uv:
+      - "uv lock"
 changelog_env:
   GIT_CLIFF_CONFIG: ".dev-include/config/cliff.toml"
   GIT_CLIFF__CHANGELOG__HEADER: "# Changelog of {project}\n\n"
@@ -95,6 +98,27 @@ merge_request:                # the MRs mr: always opens, see below
   wait: dependents            # wait for the merge: dependents | always | none
   wait_minutes: 60
   settle_seconds: 0           # and this much longer after the merge
+
+toolchain:                    # language and tool versions, see deps toolchain
+  go: "1.26"                  # the language: go directive, GO_VERSION in CI
+  go_toolchain: "1.26.2"      # the toolchain: GO_TOOLCHAIN, toolchain in go.mod
+  python: "3.14"
+toolchain_commit_message: "chore: bump toolchain"
+pins:                         # the lines the versions live on, see deps toolchain
+  - {file: go.mod, match: '^go (.+)$', value: "{go}"}
+
+renovate:                     # how deps renovate runs Renovate, see below
+  image: renovate/renovate:44 # a registry mirror prefix goes here
+  docker: docker
+  docker_args: []             # before the image: --network host, CA mounts
+  endpoint: ""                # default https://<host>/api/v4/ for gitlab
+  token_env: RENOVATE_TOKEN   # unset: glab's or gh's own token for the host
+  env: [GOPROXY, GOPRIVATE, GONOSUMDB, GITHUB_COM_TOKEN]   # NAME passes through, NAME=value sets
+  update: patch               # how far a dependency may move: patch | minor | major
+  group: all                  # merge requests: all in one per project | separate
+  internal: dev               # the config's own projects as dependencies: dev branch only | always | never
+  cache_dir: ~/.cache/repo-tools/renovate
+  config: {prConcurrentLimit: 10}        # raw Renovate global config on top
 
 hooks:                        # shell commands at rt's own events, see below
   ask:
@@ -152,7 +176,15 @@ not a string. The error says so.
 | `notes_header` | | | | ✓ | | | |
 | `notes_section_title` | ✓ | ✓ | ✓ | ✓ | | | |
 | `cmds.changelog`, `changelog_env` | ✓ | ✓ | ✓ | ✓ | | | ✓ |
+| `pins[].value`, `cmds.toolchain`, `.toolchain_check`, `toolchain_commit_message` | ✓ | ✓ | ✓ | ✓ | | | ✓ |
 | `repo exec` command | ✓ | ✓ | ✓ | ✓ | | | ✓ |
+
+The toolchain templates also take `{<key>}`, `{<key>_minor}` and
+`{<key>_next_minor}` for every key of the `toolchain` block: with
+`go_toolchain: "1.26.2"` they are `1.26.2`, `1.26` and `1.27` — the last one
+for an exclusive upper bound like `requires-python`'s `<3.14` that has to move
+with the version, and only for a version with a minor number (`trixie` and
+`3.14rc1` have none). A key may not be named like a common placeholder.
 
 The merge request templates also take `{command}` (the committing command,
 dashes for spaces: `deps-submodules`), `{date}` (today, `YYYY-MM-DD`) and,
@@ -364,6 +396,20 @@ dev-branch work, `config-2026.06.yaml` with the branches this release will get,
 used through `-c` or `$REPO_TOOLS_CONFIG`. Until those branches exist,
 `rt repo check` reports `origin/release-6.8 does not exist yet, run release
 branch to create it` rather than judging the settings against another branch.
+
+The two share most of their lines, and the next release copies the last one,
+so a config can build on another: `extends: config-base.yaml` (a path relative
+to the file, `~` allowed) puts the file's keys over the base's — maps key by
+key (`defaults`, `cmds`, `flows`), lists as a whole (`disable`, `report`), and
+`projects` by name, field by field, a project the base lacks appended at the
+end. The merge happens on the documents before rt reads them, so an unknown
+key in either file is still an error, and `rt config` prints the result, one
+document, for a look or a diff — a load error names a line of that merged
+document, and `rt config` works without loading, so it is where to look the
+line up. A base holds the commands, the merge-request
+settings, the hooks, the messages and the projects with their remotes and
+kinds; the dev overlay adds the toolchain, the pins and Renovate; a release
+overlay is the product version, the release branches and its flows.
 
 **Changelog on the release branch.** `changelog_branch: release` means "this
 project's release branch" — whatever `release_branch` names, or the highest one
@@ -618,6 +664,9 @@ Commands are grouped by what they act on:
 | `rt deps submodules` | moves the configured submodules to the head of the branch they already track |
 | `rt deps status` | shows how far submodule pins and module pins have drifted from their branches |
 | `rt deps check` | runs the kind's freshness checks (`go mod tidy -diff`, `uv lock --check`) |
+| `rt deps toolchain` | puts the projects on the language and tool versions the config names |
+| `rt config` | prints the effective config, its `extends` chain merged |
+| `rt deps renovate` | runs Renovate over the projects for the third-party dependency updates |
 | `rt git cherry-pick` | moves commits from the dev branch into the release branch, chosen by hash, by ticket, or from a list |
 | `rt git compare` | shows how the dev and release branches differ: still to pick, release-only, already in both |
 | `rt git rebase` | rebases a branch onto its target, auto-resolving conflicting submodule pins |
@@ -892,6 +941,25 @@ the project mid-run. `freeze_to: release` resolves to the highest release branch
 of the submodule's own remote; when the submodule is itself a configured project
 with a local clone, that is answered locally instead of over the network.
 
+The shared Renovate preset is an internal dependency too. Renovate reads a
+`local>group/tooling//renovate/default` preset from the tooling repository's
+default branch unless the name ends in `#ref`, so on a release branch the
+rules would keep moving with the tooling's dev branch while everything else
+is frozen. The freeze rewrites every `local>` preset of a configured project
+in the project's Renovate config file to the branch that project works on in
+this config, the rule the module pins follow: `#release-0.3` for a tooling
+on `release_branch: release-0.3`, no ref at all when it works on its dev
+branch (the plan says `renovate.json: preset local>group/tooling//renovate/default:
+default branch -> release-0.3`). The ref is replaced inside the string, the
+file keeps its layout and a preset's `(parameters)`; a preset of a
+repository outside the config, and any other preset source, is left as
+written; a JSON5 file, whose strings may be single quoted, is left alone
+and said so. The file is pinned whether or not `deps renovate` runs on the
+project (`renovate: false`): whoever runs Renovate on the release branch
+reads it. `repo check` holds the file on the target branch to the same
+rule, so a release branch's preset the freeze has not pinned, or a dev
+branch's preset left pinned, is a finding.
+
 ### deps submodules
 
 Moves the project's configured submodules to the head of the branch
@@ -985,7 +1053,342 @@ cmds:
 
 A project can replace its kind's list with its own `cmds.deps_check`; a kind
 with no checks is skipped. Keys must be `cmds.deps` kinds, anything else is a
-config error.
+config error. The `cmds.toolchain_check` commands run right after them (see
+`deps toolchain`), so a project still on the previous Go or Python version is
+stale too.
+
+### deps toolchain
+
+```sh
+rt deps toolchain                 # every project, on its target branch
+rt deps toolchain api worker      # only these
+rt deps toolchain --no-commit     # change the working trees, commit nothing
+```
+
+A language version is spread over a repository — the `go` directive and the
+`toolchain` line in `go.mod`, `GO_VERSION` and `PYTHON_VERSION` in
+`.gitlab-ci.yml`, `.python-version`, `requires-python` — and over every
+repository that shares a tooling submodule's `GO_TOOLCHAIN`. The config is
+the place that says which version the projects should be on, the way it says
+which release branch they are on, and which line of which file holds each:
+
+```yaml
+toolchain:                        # the keys are yours: each is {key}, {key_minor}, {key_next_minor}
+  go: "1.26.0"                    # the language
+  go_toolchain: "1.26.2"          # the toolchain that builds it
+  python: "3.14"
+  uv: "0.12"
+
+pins:                             # one version line each: the file, a pattern with one group, the value
+  - {file: go.mod, match: '^go (.+)$', value: "{go}"}
+  - {file: go.mod, match: '^toolchain go(.+)$', value: "{go_toolchain}", optional: true}
+  - {file: .gitlab-ci.yml, match: '^  GO_VERSION: "(.+)"$', value: "{go_minor}", kinds: [go]}
+  - {file: .gitlab-ci.yml, match: '^  PYTHON_VERSION: "(.+)"$', value: "{python_minor}"}
+  - {file: .python-version, match: '^(.+)$', value: "{python_minor}"}
+  # the lower bound; an exact upper bound (<3.14) moves to the next minor,
+  # an open one (<4) has no match and stays
+  - {file: pyproject.toml, match: '^requires-python = ">=(.+?),', value: "{python_minor}"}
+  - {file: pyproject.toml, match: '^requires-python = ">=[\d.]+,<(\d+\.\d+)"$', value: "{python_next_minor}", optional: true}
+
+cmds:
+  toolchain:                      # what is not a line, per deps kind, after the pins
+    uv:
+      - "uv lock"
+
+toolchain_commit_message: "build/AB-0000: bump toolchain: go {go_toolchain}, python {python}"
+
+projects:
+  - name: dev-include             # deps: none, but it carries the go pins
+    pins:
+      - {file: include/go.mk, match: '^GO_TOOLCHAIN \?= go(.+)$', value: "{go_toolchain}"}
+  - name: legacy
+    toolchain:                    # stays behind on purpose: entry by entry
+      go_toolchain: "1.25.14"
+  - name: public-lib
+    toolchain_commit_message: "chore: bump toolchain"   # no work ticket in a public history
+```
+
+A pin is one version line: `match` is a regular expression with exactly one
+capture group, the version, applied over the whole file with `^` and `$`
+bound to lines (a `\n` in the pattern crosses them, for a `rev:` under a
+repository name); `value` is what the group becomes. The same entry serves
+both directions: `rt deps toolchain` writes the group, `rt deps check` reads
+it and reports `pin .gitlab-ci.yml:33: 0.1.0 -> 0.1.1` for a project behind.
+A project without the file skips the pin, and `kinds` keeps a pin to the
+projects of those deps kinds (`GO_VERSION` is a go project's line; `none`
+names the projects without a kind). `file` may be a glob, `iam-*/Dockerfile`,
+for the same line in several files. A pin
+whose pattern matches nothing in a file the project does have is an error,
+not a no-op — a bump that quietly did not happen is what this is for — unless
+the pin says `optional: true` for a line only some projects carry. The files
+are the ones git tracks, so a glob reaches no ignored or untracked file the
+commit would then leave behind; a CRLF line keeps its ending. Global
+pins reach every project that has the file; a project's own `pins` come on
+top, which is how a tooling repository with `deps: none` carries `go.mk`.
+A `{word}` in a pin value or a toolchain command is a placeholder and has to
+be a toolchain key or one of the common ones; a shell parameter of that
+shape, `${home}`, is the shell's and left alone, as is a go template's
+`{{end}}`, while `awk '{print}'` has to be written `awk '{ print }'`. A key may not end in `_minor` or
+`_next_minor`: those are the derived forms of the key before them.
+
+`rt deps toolchain` applies the pins on each project's target branch, runs
+its `cmds.toolchain` commands after them (the lock file, through direnv
+where there is an `.envrc`), then commits and pushes what changed — through a
+merge request where `mr` says so, waiting for its merge when a project
+further down depends on it. A project already on the versions commits
+nothing (`already on the configured toolchain`); one with no pinned file and
+no commands is skipped. The keys of `toolchain` mean nothing to rt: the
+language and its toolchain are two keys because they go to different lines.
+A placeholder no `toolchain` key provides is a config error, so is a version
+that is not one word (`1.26.2`, `0.12`, a codename like `trixie`) or is
+`latest`, a `{<key>_next_minor}` for a version with no minor number, a key
+named `branch` or another common placeholder, a pattern that does not
+compile or has other than one group, and a kind that is not a `cmds.deps`
+kind. The plan lists the pins the branch has a
+file for, with the version each gets, and names the versions in use:
+`toolchain: go 1.26.0, go_toolchain 1.26.2`. `cmds.toolchain_check` is
+still there for a check no pin can express, run by `deps check` after the
+pins.
+
+The tooling submodule goes first in the config, so its merge request lands
+before the projects that pull it; `rt deps submodules --mr` then takes the new
+`go.mk` into the rest. Every version the toolchain block names moves only this
+way, patch releases included; Renovate stays off those lines (below).
+
+### deps renovate
+
+```sh
+rt deps renovate                              # every project with a renovate config
+rt deps renovate api --renovate-dry-run full  # say what it would do, write nothing
+rt deps renovate --log-file renovate.jsonl    # keep Renovate's raw log as well
+rt deps renovate api --local-config --renovate-dry-run full  # try an uncommitted renovate.json
+rt deps renovate --update minor               # minor and patch; the default is patch only
+rt deps renovate --group separate             # a merge request per dependency; the default is one per project
+rt deps renovate --internal never             # leave the internal modules alone; the default moves them on the dev branch
+```
+
+Third-party dependencies — `go.mod` requires, `pyproject.toml` packages, image
+tags, tool pins — are Renovate's job (the language versions are
+`deps toolchain`'s), and
+the rules stay where Renovate keeps them: each repository's own
+`renovate.json`. What rt adds is the run. It starts Renovate in docker, one
+run per platform host, against each project's target branch, with the
+platform token from `token_env` or else from glab or gh, and reports what
+happened in its own words:
+
+```
+==> gitlab git.example.com
+    running renovate/renovate:44 over 2 repositories
+==> api
+    10 dependencies in 1 file (gomod 10) on develop
+    branch renovate/go-1.26.x created
+    MR !12 created: build/AB-0000: update go to v1.26.3
+==> worker
+    WARNING: Config validation errors found
+      - Invalid configuration option: bogusKey
+    1 MR created, 0 updated, 1 warning(s), 0 error(s)
+```
+
+A project is left out — with the reason in the plan — when it has
+`renovate: false`, a git url with no host, or no Renovate config (`renovate.json`, `.gitlab/renovate.json`,
+`.renovaterc` and the other names Renovate reads) on its target branch.
+Renovate's own errors fail the step and name the projects; its warnings are
+shown and counted. The platform is the project's `ci`; with `ci: none` — no pipeline
+watched, which says nothing about where its merge requests go — the host
+decides: `github.com` is GitHub, anything else GitLab.
+
+The merge requests are authored by the token's owner, so the token needs the
+`api` scope (`glab auth login --hostname <host>` gives one). The container sees none
+of the projects' `.envrc` files — one run spans several projects — so
+`renovate.env` lists what it needs from rt's environment (`GOPROXY`,
+`GOPRIVATE`, credentials through `RENOVATE_HOST_RULES`); values and the token
+go through the environment, never the command line. Two listed names rt
+fills when the shell has not: `GITHUB_COM_TOKEN` from `gh auth token`, and
+`RENOVATE_HOST_RULES` from `~/.netrc` (or `$NETRC`), one rule per machine
+with a login and a password, less the platform host and github.com; the
+plan says so (`GITHUB_COM_TOKEN (gh)`, `RENOVATE_HOST_RULES (~/.netrc:
+pypi.example.com)`), and a value in the environment wins. The plan shows a
+`NAME=value` entry's value unless the name looks like a credential or the
+value is a url with a user in it (`GOPROXY=https://user:secret@proxy`),
+which it shows as `***`. `RENOVATE_TOKEN`, `RENOVATE_CONFIG_FILE` and
+`LOG_FORMAT` are rt's own to set and refused in the list. With
+`RENOVATE_HOST_RULES` listed the netrc is also mounted into the container,
+read-only, and named to the tools through `NETRC` in Renovate's
+`customEnvVariables` (`~/.netrc mounted for go and uv` in the plan): the
+host rules serve Renovate's own lookups, the file serves the tools it runs
+for the lock files — `go` reads it for the module proxy, `uv` for the
+package index — which Renovate gives no credentials of its own. The
+container then runs as your uid, as with `cache_dir`, so it can read the
+file. `renovate.config` takes
+any Renovate global config (`prConcurrentLimit`, `hostRules`) except the keys
+rt writes itself. `renovate.hosts.<host>` adjusts the run on one platform
+host: its `env` replaces the list (`[]` passes nothing, so a GitHub library
+does not go through the work proxy), its `config` goes over
+`renovate.config` key by key, and its `token_env` names the variable the
+host's token comes from — the shell's one token cannot serve two platforms,
+so a run whose hosts would all read the same set variable is refused; the
+plan shows each run's own env, and
+`repo check` names a hosts entry no project is on, and looks at `cache_dir`
+without making it. With `cache_dir` the container runs as your uid in group 0 (`--user`), so it can write the cache you own; the Renovate images allow that. The default image installs Go and Python on demand from
+their sites; behind a proxy, a `-full` image tag ships them. `repo check`
+reports a config file that is not valid JSON, one that sets an update
+level key of its own or `baseBranches`, the old name of `baseBranchPatterns`
+that would lose to rt's entry, or a `local>` preset of a configured project reading
+another branch of it than this config has it on (see `deps freeze`); for the projects that say
+`renovate: true` (or through `defaults`) also a missing one, the docker
+program and the token for their hosts — a config that never asked for
+Renovate is not told what it would need.
+
+The generated config also sets `cloneSubmodules: true`: a lock file update
+(`uv lock`, `go mod tidy`) needs the path dependencies the submodules are,
+and Renovate clones without them by default. A lock file Renovate could not
+update — `uv lock`, `go mod tidy`, any manager's — does not stop it: the
+merge request opens with the package file changed and the lock file not, and
+a warning names the lock file. rt makes that an error of the project
+(`ERROR: lock file not updated`, the tool's own line under it) and the step
+fails with the project named, since the merge request's pipeline cannot
+pass. Two gaps: a dry run logs the failure at debug level, which the report
+does not see, and for a release younger than two hours Renovate opens no
+merge request and says nothing above debug either — the next run does.
+
+Lookups go to the registries from inside the container: a package index
+behind credentials answers `WARNING: Package lookup failures` until
+`RENOVATE_HOST_RULES` (passed through `renovate.env`, or taken from
+`~/.netrc`) or `renovate.config: hostRules` gives Renovate the way in. The
+GitHub token matters beyond github.com packages: the default image picks the
+Python and Go it installs from GitHub releases, and without the token that
+lookup is rate-limited and no lock file is updated. `config:recommended` also opens a
+Dependency Dashboard issue per repository; `"dependencyDashboard": false` in
+`renovate.json` turns it off.
+
+`--renovate-dry-run extract|lookup|full` runs Renovate's own dry run through
+the usual plan with no question asked: nothing is written to the platform and
+the report says what would be. rt's `--dry-run` still only prints the plan.
+
+`--update patch|minor|major` says how far a dependency may move in this run;
+`renovate.update` in the config is the default, `patch` when unset. Each
+level includes the ones below: `patch` holds major and minor updates back
+and has Renovate offer the newest patch apart from the newest minor
+(`separateMinorPatch`), `minor` holds major back, `major` takes everything,
+one update per dependency (`separateMajorMinor: false`). A digest update (a
+git rev moved to its branch's head) and a replacement (a package renamed
+upstream) are no level at all, so only `major` lets them through. rt writes this as a
+`packageRules` entry at the front of the global config, so a rule of
+`renovate.config` or of a repository's own file can still open a level for
+one package. The two separation keys are rt's to set: `renovate.config`
+refuses them, and since a repository's file wins over the global config, one
+that sets them undoes the level for that project alone — `repo check` reports
+it, `--local-config` skips the project. The plan names the level:
+`updates: patch only, major, minor and digest held back`.
+
+`--group all|separate` says how the updates are cut into merge requests;
+`renovate.group` in the config is the default, `all` when unset. `all` puts
+every update of a project in one merge request, on `renovate/dependencies`
+(`renovate/patch-dependencies` at the patch level), with a `groupName` rule
+rt appends after the project's own rules — a later rule wins in Renovate,
+so a group of the file's own does not split its packages off, and a file
+needs no group rule of its own. `separate` adds nothing: one merge request
+per dependency, grouped only where the file says so. The plan names it:
+`merge requests: one per project`.
+
+`--internal dev|always|never` says when the config's own projects move as
+dependencies of each other — the internal Go modules a go.mod requires at a
+pseudo-version of their dev branch; `renovate.internal` in the config is the
+default, `dev` when unset. Under `dev` Renovate takes them to their dev
+branch's head on a project's dev branch alone (`internal modules too` in
+the plan), and holds them back on every other branch, where `deps freeze`
+has pinned them to release branches; `always` and `never` say so for every
+branch. Renovate takes a module to the head of its repository's default
+branch on the platform, so that has to be the dev branch: `repo check` says
+when origin's default branch, as the clone recorded it, is another. rt
+names the modules by the projects' remotes (`host/group/name` and what
+is under it) in a rule that comes last in the repository's rules, since it
+has to win over the level rule — a pseudo-version moving to the branch's
+head is a digest update — and over a shared config that disables them; a
+second rule then closes again what the level holds back, the digest apart,
+and the types that are no release (a pin, a rollback, lock file
+maintenance), so a tag of an internal module moves as the level says. A
+submodule in `tool.uv.sources` is not a dependency Renovate moves: that is
+`deps submodules`.
+
+To put its rule after the file's, rt reads each project's config itself —
+from its target branch, or with `--local-config` from its working copy — and
+hands it to Renovate inside the repository's entry of the generated config,
+with `requireConfig: ignored`, so the file is not read a second time. The
+file has to be JSON (a `.json5` one is Renovate's own to read, so the project
+is skipped) and its `packageRules` a list; comments or trailing commas,
+which Renovate itself would forgive, skip it too. Presets the file extends still
+come from their repositories.
+
+`--local-config` takes the working copy's file, committed or not, so a new
+`renovate.json` can be tried against the platform without a commit per
+attempt. A shared preset the file extends — `local>group/tooling//renovate/default`
+— is Renovate's to fetch from the platform, so until it is pushed every run
+extending it fails; under `--local-config` rt takes such a preset from the
+working copy of the project it names, when that project is in the config,
+and puts it into the file the way Renovate would have: the preset's keys
+under the file's own, the package rules the preset's first, the preset's
+own `extends` in its place, the lists Renovate merges (`packageRules`,
+`postUpdateOptions`, `ignoreDeps` and the rest of its mergeable options)
+joined with the preset's first, nested `local>` presets the same way (the
+plan says `preset renovate/default.json from tooling's working copy`); the
+`local>group/tooling:name` form is `name.json` at the root. A preset
+with a `#ref`, as `deps freeze` writes on a release branch, is read from
+that branch of the project instead — the local branch when there is one,
+so a commit not yet pushed counts the way the working copy does (`from
+tooling on release-0.3`); a preset's `(parameters)` stay as written. A
+JSON5 preset, a missing file, a project of the config not cloned or a
+preset extending itself skips the project with the reason; a preset of a
+repository outside the config stays Renovate's. Without `--renovate-dry-run`
+the run is a real one: it opens merge requests by the uncommitted rules.
+
+A shared preset in the tooling repository keeps the rules in one place, and
+each project's `renovate.json` is one line,
+`{"extends": ["local>group/dev-include//renovate/default"]}`. The split it
+keeps: Renovate owns the package dependencies alone (`go.mod` requires,
+`pyproject.toml` dependencies); `deps toolchain` owns every other version —
+the `go` directive, `requires-python`, the CI variables, the make files, the
+image tags in Dockerfiles, compose files and an `.env`, a `go install`, the
+pre-commit hook revs — through its pins, so no file has two writers; `deps
+submodules` and `deps freeze` own the internal modules. The `go` and
+`toolchain` directives are gomod deps too, so the preset switches them off:
+
+```json
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommitsDisabled"],
+  "commitMessagePrefix": "build/AB-0000:",
+  "dependencyDashboard": false,
+  "enabledManagers": ["gomod", "pep621"],
+  "postUpdateOptions": ["gomodTidy"],
+  "packageRules": [
+    {
+      "description": "internal modules follow their branches through deps freeze and deps submodules",
+      "matchPackageNames": ["git.example.com/**", "pylib"],
+      "enabled": false
+    },
+    {
+      "description": "the go and toolchain directives and requires-python move with deps toolchain",
+      "matchDepTypes": ["golang", "toolchain", "requires-python"],
+      "enabled": false
+    }
+  ]
+}
+```
+
+A tool version Renovate should follow after all — one `deps toolchain` is
+not meant to carry — takes a regex `customManagers` entry with the file, a
+`matchStrings` pattern naming `currentValue`, and the datasource; one such
+manager per variable name works across the projects because the names are
+shared. Whatever it covers has to leave the pins, or the two would move the
+same line.
+
+`git-submodules` stays out of `enabledManagers`: submodule pins are
+`deps submodules`' job. `managerFilePatterns` needs Renovate 41 or later (an
+older image reads `fileMatch`); the default image is the current major, 44.
+Lookups of GitHub releases and github.com modules want a GitHub token,
+otherwise Renovate warns and gets rate-limited: list `GITHUB_COM_TOKEN`
+in `renovate.env`, and gh's login serves when the shell has no value.
 
 ### git cherry-pick
 

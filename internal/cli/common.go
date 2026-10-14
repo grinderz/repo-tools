@@ -120,9 +120,9 @@ func pipefailPrefix() string {
 // runShell runs one of the project's own commands, through direnv when the
 // project has an .envrc.
 func runShell(rctx *run.Ctx, r gitx.Repo, command string, env []string) error {
-	command = pipefailPrefix() + command
-
 	use, blocked := direnvState(rctx, r)
+
+	var err error
 
 	switch {
 	case blocked:
@@ -130,10 +130,22 @@ func runShell(rctx *run.Ctx, r gitx.Repo, command string, env []string) error {
 		// the internal one and fail later, in a much less obvious way.
 		return fmt.Errorf("%s/%s %w %s", r.Dir, envrcFile, errEnvrcBlocked, r.Dir)
 	case use:
-		return r.ShDirenv(command, env)
+		err = r.ShDirenv(pipefailPrefix()+command, env)
 	default:
-		return r.ShEnv(command, env)
+		err = r.ShEnv(pipefailPrefix()+command, env)
 	}
+
+	// The error names the command as the config wrote it: the pipefail line
+	// is rt's own and only clutters the message.
+	if err != nil {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
+			return fmt.Errorf("command %q: %w", command, exitErr)
+		}
+
+		return err
+	}
+
+	return nil
 }
 
 // direnvPlanLines mention direnv in the plan, since it changes what the

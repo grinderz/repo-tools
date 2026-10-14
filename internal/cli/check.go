@@ -1,11 +1,15 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"syscall"
 
 	"github.com/spf13/cobra"
 
@@ -36,9 +40,16 @@ func newCheckCmd(rctx *run.Ctx, name string) *cobra.Command {
 				}
 			}
 
-			// The hooks are the config's, not a project's: checked once.
+			// The hooks and the renovate run are the config's, not a
+			// project's: checked once.
 			if issues := checkHooks(rctx.Cfg); len(issues) > 0 {
 				report("hooks", issues)
+
+				problems++
+			}
+
+			if issues := checkRenovate(rctx, projects); len(issues) > 0 {
+				report("renovate", issues)
 
 				problems++
 			}
@@ -72,6 +83,8 @@ func checkProject(rctx *run.Ctx, p *config.Project) []string {
 	issues = append(issues, checkWorktree(r)...)
 	issues = append(issues, checkSubmodules(rctx, r, p)...)
 	issues = append(issues, checkDeps(rctx, p)...)
+	issues = append(issues, checkToolchain(rctx, p)...)
+	issues = append(issues, checkRenovateConfig(rctx, r, p)...)
 	issues = append(issues, checkCI(p)...)
 	issues = append(issues, mrCheck(rctx, p)...)
 	issues = append(issues, checkChangelog(rctx, r, p)...)
@@ -148,6 +161,18 @@ func checkRemote(r gitx.Repo, p *config.Project) []string {
 
 	if !r.RemoteBranchExists(p.DevBranch) {
 		issues = append(issues, fmt.Sprintf("origin/%s (dev_branch) does not exist", p.DevBranch))
+	}
+
+	// Renovate takes an internal module to the head of its repository's
+	// default branch on the platform, which only deps renovate --internal
+	// dev assumes is the dev branch. The clone records origin's default
+	// branch as origin/HEAD; a clone without one is not told.
+	if head, err := r.Git("symbolic-ref", "-q", "refs/remotes/origin/HEAD"); err == nil {
+		if branch := strings.TrimPrefix(head, "refs/remotes/origin/"); branch != p.DevBranch {
+			issues = append(issues, fmt.Sprintf(
+				"origin's default branch is %s, dev_branch is %s: renovate's internal updates would follow %s",
+				branch, p.DevBranch, branch))
+		}
 	}
 
 	// "release" is resolved per project, and the release branch may not exist
@@ -346,6 +371,153 @@ func checkDeps(rctx *run.Ctx, p *config.Project) []string {
 	return checkPrograms(fmt.Sprintf("deps (%s)", p.Deps), depsCmds(rctx, p, p.DevBranch))
 }
 
+// checkToolchain reports toolchain commands and checks whose program is not
+// on PATH, the way checkDeps does for the deps commands.
+func checkToolchain(rctx *run.Ctx, p *config.Project) []string {
+	branch := p.TargetBranch()
+	vars := toolchainVars(rctx, p, branch)
+
+	templates := append(rctx.Cfg.ToolchainCommands(p), rctx.Cfg.ToolchainCheckCommands(p)...)
+	cmds := make([]string, 0, len(templates))
+
+	for _, cmd := range templates {
+		cmds = append(cmds, expand(cmd, vars))
+	}
+
+	return checkPrograms("toolchain", cmds)
+}
+
+// checkRenovateConfig reports a renovate config that is not even JSON —
+// Renovate would open an error issue for that, a worse place to learn it —
+// and a missing one where the project said renovate: true. Without that
+// word a project with no config is simply not one deps renovate looks
+// after, which is no finding. A shared preset of a configured project has
+// to read the branch this config has that project on, renovate: false or
+// not: deps freeze pins it either way, whoever runs Renovate reads it.
+func checkRenovateConfig(rctx *run.Ctx, r gitx.Repo, p *config.Project) []string {
+	branch := p.TargetBranch()
+
+	// A branch nobody has created yet is checkReleaseBranch's finding; the
+	// working tree would be read in its name here.
+	ref := branchRef(r, branch)
+	if ref == "" {
+		return nil
+	}
+
+	file := renovateConfigFile(r, ref)
+	if file == "" {
+		if !p.RenovateRequired() {
+			return nil
+		}
+
+		return []string{"renovate: true but no renovate.json on " + branch}
+	}
+
+	body, found, err := r.FileAt(ref, file)
+	if err != nil || !found {
+		return nil
+	}
+
+	// Read as deps renovate reads it, so what skips the project there is a
+	// finding here: not JSON, JSON5, a level key of its own, odd rules.
+	if _, reason := renovateParseConfig([]byte(body), file, "on "+branch); reason != "" {
+		if !p.RenovateEnabled() {
+			return nil
+		}
+
+		return []string{"renovate: " + reason}
+	}
+
+	return checkPresetRefs(rctx, p, file, branch, body)
+}
+
+// checkRenovate reports a renovate run that could not start: the docker
+// program missing, no token for a host, a cache directory that cannot be
+// made. Only when some project is eligible at all.
+func checkRenovate(rctx *run.Ctx, projects []*config.Project) []string {
+	cfg := &rctx.Cfg.Renovate
+
+	// A hosts entry is a typo whether or not any project asked for Renovate.
+	issues := checkRenovateHosts(cfg, rctx.Cfg.Projects)
+
+	hosts := renovateHosts(projects)
+	if len(hosts) == 0 {
+		return issues
+	}
+
+	if _, err := exec.LookPath(cfg.Docker); err != nil {
+		issues = append(issues, cfg.Docker+" is not in PATH")
+	}
+
+	for _, key := range hosts {
+		platform, host, _ := strings.Cut(key, " ")
+
+		if _, _, err := renovateToken(cfg.ForHost(host), platform, host); err != nil {
+			issues = append(issues, err.Error())
+		}
+	}
+
+	if issue := checkCacheDir(cfg.CacheDir); issue != "" {
+		issues = append(issues, issue)
+	}
+
+	return issues
+}
+
+// checkCacheDir says whether the run could make or use cache_dir, without
+// making it: a check is read-only. A missing directory is fine when its
+// nearest existing parent is a directory we can write to.
+func checkCacheDir(dir string) string {
+	if dir == "" {
+		return ""
+	}
+
+	for probe := dir; ; probe = filepath.Dir(probe) {
+		info, err := os.Stat(probe)
+
+		switch {
+		case err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, syscall.ENOTDIR):
+			return fmt.Sprintf("cache_dir: %v", err) // a parent that cannot be read is not one to build under
+		case err == nil && !info.IsDir():
+			return fmt.Sprintf("cache_dir: %s is not a directory", probe)
+		case err == nil:
+			f, err := os.CreateTemp(probe, ".rt-check-*")
+			if err != nil {
+				return fmt.Sprintf("cache_dir: %s is not writable", probe)
+			}
+
+			_ = f.Close()
+			_ = os.Remove(f.Name())
+
+			return ""
+		case filepath.Dir(probe) == probe:
+			return fmt.Sprintf("cache_dir: %v", err)
+		}
+	}
+}
+
+// checkRenovateHosts reports a hosts entry no project is on: a typo there
+// would leave the run it meant to adjust as it is, without a word.
+func checkRenovateHosts(cfg *config.Renovate, projects []*config.Project) []string {
+	known := map[string]bool{}
+
+	for _, p := range projects {
+		if host, _, ok := config.SplitRemote(p.Git); ok {
+			known[host] = true
+		}
+	}
+
+	var issues []string
+
+	for _, host := range slices.Sorted(maps.Keys(cfg.Hosts)) {
+		if !known[host] {
+			issues = append(issues, "hosts: "+host+" is no project's git host")
+		}
+	}
+
+	return issues
+}
+
 // checkPrograms reports the commands whose program is not on PATH. A missing
 // generator is otherwise found only at run time, and a pipeline can even hide
 // it: git-cliff | sed exits through sed and writes an empty file.
@@ -364,24 +536,166 @@ func checkPrograms(label string, cmds []string) []string {
 }
 
 // pipelinePrograms names the programs a shell command runs: the first word of
-// every stage of a pipeline, skipping anything that is shell syntax rather
-// than a program.
+// every stage of a pipeline or a list (|, &&, || and ;), skipping anything
+// that is shell syntax rather than a program.
 func pipelinePrograms(cmd string) []string {
-	var programs []string
+	var (
+		programs []string
+		inCase   bool
+	)
 
-	for stage := range strings.SplitSeq(cmd, "|") {
+	stages := shellStages(cmd)
+
+	for pos, stage := range stages {
 		fields := strings.Fields(stage)
-		if len(fields) == 0 {
-			continue
+
+		// Inside case … esac the program follows the pattern, a word that
+		// ends in ), and the pattern may be any word at all: py) as well
+		// as *). a|b) is cut at the | into stages, so a one-word stage
+		// before one that opens with a pattern is the pattern's other half.
+		if len(fields) > 0 && fields[0] == "case" {
+			inCase = true
 		}
 
-		program := fields[0]
-		if strings.ContainsAny(program, "=<>&$(`\"'") {
-			continue // a redirection or an assignment, not a program name
+		if inCase {
+			if len(fields) == 1 && opensWithCasePattern(stages[pos+1:]) {
+				continue
+			}
+
+			fields = afterCasePattern(fields)
 		}
 
-		programs = append(programs, program)
+		if len(fields) > 0 && fields[0] == "esac" {
+			inCase = false
+		}
+
+		if program := stageProgram(fields); program != "" && !slices.Contains(programs, program) {
+			programs = append(programs, program) // once: a program is on PATH or not
+		}
 	}
 
 	return programs
+}
+
+// stageProgram is the program a stage's words run, "" when they run none:
+// shell syntax, a builtin, a redirection or an expansion.
+func stageProgram(fields []string) string {
+	for len(fields) > 0 && (shellKeyword(fields[0]) || shellAssignment(fields[0])) {
+		fields = fields[1:] // GOFLAGS=-mod=mod go mod tidy runs go
+	}
+
+	if len(fields) == 0 || shellBuiltin(fields[0]) {
+		return ""
+	}
+
+	// (cd sub && make) is two stages, the parens are the subshell's
+	program := strings.TrimRight(strings.TrimLeft(fields[0], "("), ")")
+
+	if shellBuiltin(program) || strings.ContainsAny(program, "=<>&$(`\"'") {
+		return "" // a redirection or an expansion, not a program name
+	}
+
+	return program
+}
+
+// afterCasePattern is what follows the last case pattern of a stage, the
+// stage itself when it has none.
+func afterCasePattern(fields []string) []string {
+	cut := -1
+
+	for i, word := range fields {
+		if casePattern(word) {
+			cut = i
+		}
+	}
+
+	return fields[cut+1:]
+}
+
+// casePattern says whether a word closes a case pattern: *), py), but not
+// the ) of a subshell.
+func casePattern(word string) bool {
+	return strings.HasSuffix(word, ")") && !strings.HasPrefix(word, "(")
+}
+
+// opensWithCasePattern says whether the next stage that has any words
+// starts with a case pattern.
+func opensWithCasePattern(stages []string) bool {
+	for _, stage := range stages {
+		if fields := strings.Fields(stage); len(fields) > 0 {
+			return casePattern(fields[0])
+		}
+	}
+
+	return false
+}
+
+// shellAssignment reports a NAME=value word: in front of a command it sets
+// the command's environment, it is not the command.
+func shellAssignment(word string) bool {
+	name, _, ok := strings.Cut(word, "=")
+
+	return ok && config.IsEnvName(name)
+}
+
+// shellStages splits a command at the |, &&, || and ; that stand outside
+// quotes (single, double or backticks), so a perl or sed script that carries
+// those characters stays whole.
+func shellStages(cmd string) []string {
+	var (
+		stages []string
+		quote  byte
+	)
+
+	start := 0
+
+	for pos := 0; pos < len(cmd); pos++ {
+		c := cmd[pos]
+
+		switch {
+		case c == '\\' && quote != '\'':
+			pos++ // the next character is escaped
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '\'' || c == '"' || c == '`':
+			quote = c
+		case c == '|' || c == ';' || c == '&' && pos+1 < len(cmd) && cmd[pos+1] == '&':
+			stages = append(stages, cmd[start:pos])
+
+			if (c == '|' || c == '&') && pos+1 < len(cmd) && cmd[pos+1] == c {
+				pos++
+			}
+
+			start = pos + 1
+		}
+	}
+
+	return append(stages, cmd[start:])
+}
+
+// shellKeyword reports a word that opens or continues a compound command, the
+// program that follows it is the one that runs.
+func shellKeyword(word string) bool {
+	switch word {
+	case "if", "then", "else", "elif", "while", "until", "do", "!", "{", "time", "exec":
+		return true
+	}
+
+	return false
+}
+
+// shellBuiltin reports a word whose stage runs no program: a keyword that
+// closes a compound command, one whose next word is a name or a pattern (for
+// f in …, case x in …), or a builtin with no binary worth looking for.
+func shellBuiltin(word string) bool {
+	switch word {
+	case "fi", "done", "esac", "}", "in", "for", "case", "select", "function",
+		"[", "[[", "test", ":", "cd", "exit", "return", "export", "local", "read", "shift", "trap",
+		"set", "unset", "source", ".", "eval":
+		return true
+	}
+
+	return false
 }

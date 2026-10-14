@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,6 +53,32 @@ func (r Repo) Lines(args ...string) ([]string, error) {
 	}
 
 	return strings.Split(out, "\n"), nil
+}
+
+// Stdout runs an arbitrary program and returns its trimmed standard output
+// alone — for a value read off a tool, like a token, that a notice on
+// stderr (glab's update check) must not get into. stderr goes into the
+// error.
+func (r Repo) Stdout(program string, args ...string) (string, error) {
+	cmd := exec.CommandContext(context.Background(), program, args...)
+	cmd.Dir = r.Dir
+
+	var out, errOut bytes.Buffer
+
+	cmd.Stdout = &out
+	cmd.Stderr = &errOut
+
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf(
+			"%s %s: %w\n%s",
+			program,
+			strings.Join(args, " "),
+			err,
+			strings.TrimSpace(errOut.String()),
+		)
+	}
+
+	return strings.TrimSpace(out.String()), nil
 }
 
 // Output runs an arbitrary program in the repo dir and returns its trimmed
@@ -255,6 +282,27 @@ func (r Repo) FileAt(ref, path string) (string, bool, error) {
 	}
 
 	return content, true, nil
+}
+
+// FilesAt lists every file at ref, or in the working tree for an empty ref.
+func (r Repo) FilesAt(ref string) ([]string, error) {
+	// -z: a path with a byte outside ASCII is quoted otherwise, and would
+	// match no pattern.
+	args := []string{"ls-files", "-z"}
+	if ref != "" {
+		args = []string{"ls-tree", "-r", "-z", "--name-only", ref}
+	}
+
+	// stdout alone: a warning git prints about the ref would otherwise
+	// become part of the first path.
+	out, err := r.Stdout("git", args...)
+	if err != nil {
+		return nil, err
+	}
+
+	paths := strings.Split(out, "\x00")
+
+	return slices.DeleteFunc(paths, func(p string) bool { return p == "" }), nil
 }
 
 // SubmoduleNameByPath resolves the .gitmodules section name for a path.

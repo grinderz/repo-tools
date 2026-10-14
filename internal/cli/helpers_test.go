@@ -482,6 +482,7 @@ func TestHelpAllCoversTheTree(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"rt repo clean", "rt deps submodules", "rt git cherry-pick", "rt changelog gen",
+		"rt deps renovate", "rt deps toolchain", "--renovate-dry-run",
 		"--allow-dirty", "--untracked", "--task", "--keep-going",
 	} {
 		if !strings.Contains(text, want) {

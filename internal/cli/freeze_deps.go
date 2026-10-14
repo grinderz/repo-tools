@@ -118,6 +118,13 @@ func planFreezeDeps(
 
 	st.Plan = append(st.Plan, pins...)
 
+	presets, err := planPresets(rctx, r, p, ref)
+	if err != nil {
+		return st, err
+	}
+
+	st.Plan = append(st.Plan, presets...)
+
 	// Both halves judge the branch being frozen, not the current checkout: a
 	// release branch may carry no submodules at all while the dev branch does.
 	if frozen, _ := freezeList(rctx, r, p, ref); len(frozen) == 0 {
@@ -355,6 +362,12 @@ func freezeDeps(rctx *run.Ctx, p *config.Project, branch string, noDeps, allowDi
 	// The refs the deps commands resolve have to be the frozen ones before
 	// those commands run, or go.mod would be written from dev heads.
 	if err := freezePins(rctx, r, p); err != nil {
+		return withLeftovers(r, err)
+	}
+
+	// The shared Renovate preset is an internal dependency too: it follows
+	// the tooling's branch the way the submodule does.
+	if err := freezePresets(rctx, r, p); err != nil {
 		return withLeftovers(r, err)
 	}
 

@@ -5,9 +5,9 @@ MAKEFLAGS += --warn-undefined-variables
 SHELL := bash
 
 # pinned; `go run` fetches the exact version on demand
-GO_GOLANGCI_LINT_VERSION ?= 2.13.2
+GO_GOLANGCI_LINT_VERSION ?= 2.14.0
 GO_GOLANGCI_LINT_TIMEOUT ?= 10m
-PRE_COMMIT_VERSION ?= 4.6
+PRE_COMMIT_VERSION ?= 4.7
 
 GO_GOLANGCI_LINT_CMD ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GO_GOLANGCI_LINT_VERSION)
 PRE_COMMIT ?= uvx pre-commit@$(PRE_COMMIT_VERSION)
@@ -36,7 +36,7 @@ go-comma := ,
 GO_TEST_TAGS_FLAG = $(if $(strip $(GO_TEST_TAGS)),-tags=$(subst $(go-space),$(go-comma),$(strip $(subst $(go-comma),$(go-space),$(GO_TEST_TAGS)))))
 
 # the golang image test.docker runs in; the tests need nothing but go and git
-GO_DOCKER_GO_VERSION ?= 1.26
+GO_DOCKER_GO_VERSION ?= 1.27
 GO_DOCKER_DEBIAN_VERSION ?= trixie
 GO_DOCKER_IMAGE ?= golang:$(GO_DOCKER_GO_VERSION)-$(GO_DOCKER_DEBIAN_VERSION)
 # runs before make inside the container

@@ -203,3 +203,17 @@ func TestCleanProjectDiscardsEditsInsideSubmodules(t *testing.T) {
 		t.Errorf("submodule pin = %s, want the recorded %s", got, pinBefore)
 	}
 }
+
+// A failing project command is reported as the config wrote it: the
+// pipefail line rt puts in front is its own business.
+func TestRunShellErrorNamesTheCommandAsWritten(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+
+	err := runShell(testCtx(), gitx.Repo{Dir: f.parent}, "exit 3", nil)
+	if err == nil || strings.Contains(err.Error(), "pipefail") ||
+		!strings.Contains(err.Error(), `command "exit 3": exit status 3`) {
+		t.Errorf("err = %v", err)
+	}
+}

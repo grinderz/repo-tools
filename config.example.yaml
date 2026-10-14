@@ -5,6 +5,10 @@
 #
 # Projects are processed strictly in the order they appear below, so put
 # libraries before the projects that consume them as submodules.
+#
+# A config may build on another: extends: config-base.yaml puts this file's
+# keys over the base's (maps key by key, lists as a whole, projects by name);
+# rt config prints the result. See the README.
 
 projects_dir: ~/src/projects
 
@@ -37,6 +41,65 @@ cmds:
       - "uv lock --check"
     go:
       - "go mod tidy -diff"
+  # toolchain: what deps toolchain runs after the pins (below), per deps
+  #   kind — whatever is not a version line, like the lock file. The same
+  #   placeholders as the pins. toolchain_check: read-only, run by deps check
+  #   after the pins, for a check no pin can express.
+  toolchain:
+    go:
+      - "go mod tidy"
+    uv:
+      - "uv lock"
+
+# The language and tool versions the projects should be on. The keys are free:
+# each one is {key} and {key_minor} in the toolchain commands, so the language
+# and the toolchain that builds it are two keys because they go to different
+# places. A project can override single entries with its own toolchain block.
+toolchain:
+  go: "1.26.0"
+  go_toolchain: "1.26.2"
+  python: "3.14"
+toolchain_commit_message: "chore: bump toolchain to go {go_toolchain}, python {python}"
+
+# The lines those versions live on: deps toolchain writes the one capture
+# group of match, deps check reads it — one entry for both. A project without
+# the file skips the pin; a pin that matches nothing in a file the project
+# has is an error unless optional; kinds limits a pin to those deps kinds.
+# ^ and $ bind to lines, \n in a pattern crosses them.
+pins:
+  - {file: go.mod, match: '^go (.+)$', value: "{go}"}
+  - {file: go.mod, match: '^toolchain go(.+)$', value: "{go_toolchain}", optional: true}
+  - {file: .gitlab-ci.yml, match: '^  GO_VERSION: "(.+)"$', value: "{go_minor}", kinds: [go]}
+  - {file: .gitlab-ci.yml, match: '^  PYTHON_VERSION: "(.+)"$', value: "{python_minor}"}
+  - {file: .python-version, match: '^(.+)$', value: "{python_minor}"}
+  # the lower bound; an exact upper bound (<3.14) moves to {python_next_minor},
+  # an open one (<4) has no match and stays
+  - {file: pyproject.toml, match: '^requires-python = ">=(.+?),', value: "{python_minor}"}
+  - {file: pyproject.toml, match: '^requires-python = ">=[\d.]+,<(\d+\.\d+)"$', value: "{python_next_minor}", optional: true}
+
+# How deps renovate runs Renovate. The rules are each repository's own
+# renovate.json; rt brings the run, the token and the report.
+renovate:
+  image: renovate/renovate:44          # a registry mirror prefix goes here
+  docker: docker                       # or podman
+  docker_args: []                      # extra args before the image
+  endpoint: ""                         # default https://<host>/api/v4/ for gitlab
+  token_env: RENOVATE_TOKEN            # unset: glab's or gh's own token for the host
+  env: [GOPROXY, GOPRIVATE, GONOSUMDB, GITHUB_COM_TOKEN, RENOVATE_HOST_RULES]  # NAME passes rt's variable through, NAME=value sets one
+                                       # GITHUB_COM_TOKEN unset: gh's login; RENOVATE_HOST_RULES unset: ~/.netrc
+  update: patch                        # how far a run may move a dependency: patch | minor | major; --update for one run
+  group: all                           # merge requests: all (one per project) | separate (Renovate's own cut); --group for one run
+  internal: dev                        # the config's own projects as dependencies: dev (their dev branch only) | always | never
+  cache_dir: ~/.cache/repo-tools/renovate
+  config:                              # raw Renovate global config on top of rt's
+    prConcurrentLimit: 10
+    prHourlyLimit: 0
+  hosts:                               # the run on one platform host, adjusted
+    github.com:
+      token_env: GITHUB_TOKEN          # this host's token; the block's token_env cannot serve two platforms
+      env: []                          # replaces env for this host; [] passes nothing
+      config:                          # over config, key by key
+        gitAuthor: "Your Name <you@users.noreply.github.com>"
 
 # Environment for the changelog commands. Values take the same placeholders.
 changelog_env:
@@ -225,6 +288,8 @@ defaults:
   # commits as merge requests instead of pushes to the target branch: always,
   # none (final, even under --mr), or unset — then only --mr turns it on
   mr: none
+  renovate: true          # repo check then wants a renovate.json (unset: deps renovate takes
+                          # the projects that have one, false: never)
   changelog: true
   deps_freeze: true
   release_tags: true      # release rc / release tag; on unless set to false
@@ -235,6 +300,10 @@ projects:
     git: git@git.example.com:group/dev-include.git
     changelog: false
     deps_freeze: false
+    renovate: false
+    pins:                   # deps: none, but it carries the go pins of everyone
+      - {file: include/go.mk, match: '^GO_TOOLCHAIN \?= go(.+)$', value: "{go_toolchain}"}
+    toolchain_commit_message: "chore: bump toolchain"   # its own, say for a public history
 
   # A python library consumed by the services below. Its submodules list could
   # be left out: .dev-include is a project here, so it would be frozen to the

@@ -483,3 +483,27 @@ func TestPlainTextStripsThePrompt(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// A step that is a run over several projects has no project of its own: its
+// label stands where the name would, in the plan and when it runs, and a
+// failure is reported under it.
+func TestStepsWithALabelInsteadOfAProject(t *testing.T) {
+	t.Parallel()
+
+	steps := []Step{{Label: "gitlab git.example.com", Exec: func() error { return errors.New("boom") }}}
+
+	if got := steps[0].title(); got != "gitlab git.example.com" {
+		t.Errorf("title = %q", got)
+	}
+
+	err := Execute(steps, true)
+	if err == nil || !strings.Contains(err.Error(), "stopped at gitlab git.example.com") {
+		t.Errorf("err = %v, want the label in it", err)
+	}
+
+	ran := false
+
+	if err := Execute([]Step{{Label: "x", Exec: func() error { ran = true; return nil }}}, true); err != nil || !ran {
+		t.Errorf("a labelled step should run: ran=%v err=%v", ran, err)
+	}
+}

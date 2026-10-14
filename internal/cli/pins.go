@@ -76,8 +76,6 @@ func freezePins(rctx *run.Ctx, r gitx.Repo, p *config.Project) error {
 		return nil
 	}
 
-	path := filepath.Join(r.Dir, pin.File)
-
 	text, found, err := r.FileAt("", pin.File)
 	if err != nil {
 		return err
@@ -104,17 +102,28 @@ func freezePins(rctx *run.Ctx, r gitx.Repo, p *config.Project) error {
 		return nil
 	}
 
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("stat %s: %w", pin.File, err)
-	}
-
-	if err := os.WriteFile(path, []byte(updated), info.Mode().Perm()); err != nil {
-		return fmt.Errorf("write %s: %w", pin.File, err)
+	if err := rewriteFile(r, pin.File, updated); err != nil {
+		return err
 	}
 
 	for _, c := range changes {
 		fmt.Printf("    %s %s\n", pin.File, c)
+	}
+
+	return nil
+}
+
+// rewriteFile puts text into a file of the working copy, its mode kept.
+func rewriteFile(r gitx.Repo, file, text string) error {
+	path := filepath.Join(r.Dir, file)
+
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", file, err)
+	}
+
+	if err := os.WriteFile(path, []byte(text), info.Mode().Perm()); err != nil {
+		return fmt.Errorf("write %s: %w", file, err)
 	}
 
 	return nil

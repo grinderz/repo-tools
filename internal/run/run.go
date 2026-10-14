@@ -263,10 +263,23 @@ func (c *Ctx) Select(names []string) ([]*config.Project, error) {
 // Step is one project's part of a batch command.
 type Step struct {
 	Project *config.Project
-	Plan    []string     // human-readable plan lines
-	Warn    string       // shown in plan; step still runs unless Skip
-	Skip    bool         // planned as no-op (with Warn as the reason)
-	Exec    func() error // nil for read-only/skipped steps
+	// Label names a step that is not one project's — a run over several of
+	// them at once, like Renovate's — and is printed where the project name
+	// would be. Project is nil then.
+	Label string
+	Plan  []string     // human-readable plan lines
+	Warn  string       // shown in plan; step still runs unless Skip
+	Skip  bool         // planned as no-op (with Warn as the reason)
+	Exec  func() error // nil for read-only/skipped steps
+}
+
+// title is what the plan and the progress lines call the step.
+func (s Step) title() string {
+	if s.Project == nil {
+		return s.Label
+	}
+
+	return s.Project.Name
 }
 
 // Gate prints the plan and applies dry-run/confirmation rules.
@@ -282,7 +295,7 @@ func (c *Ctx) Gate(name string, class Class, steps []Step) (bool, error) {
 			status = Dim("  [skip]")
 		}
 
-		fmt.Printf("  %s%s\n", Bold(s.Project.Name), status)
+		fmt.Printf("  %s%s\n", Bold(s.title()), status)
 
 		for _, l := range s.Plan {
 			fmt.Printf("      %s\n", l)
@@ -369,9 +382,12 @@ func Execute(steps []Step, stopOnError bool) error {
 			continue
 		}
 
-		fmt.Printf("%s %s\n", Arrow(), Bold(s.Project.Name))
+		fmt.Printf("%s %s\n", Arrow(), Bold(s.title()))
 
-		setProject(s.Project.Name, s.Project.Dir())
+		if s.Project != nil {
+			setProject(s.Project.Name, s.Project.Dir())
+		}
+
 		err := s.Exec()
 
 		setProject("", "")
@@ -380,11 +396,11 @@ func Execute(steps []Step, stopOnError bool) error {
 			// The reason is printed here, in the project's own context; what
 			// travels up is only which project stopped the run, or the caller
 			// would print the whole thing a second time on the way out.
-			fmt.Fprintf(os.Stderr, "%s %s: %v\n", Fail(), s.Project.Name, err)
+			fmt.Fprintf(os.Stderr, "%s %s: %v\n", Fail(), s.title(), err)
 
-			failed = append(failed, s.Project.Name)
+			failed = append(failed, s.title())
 			if stopOnError {
-				return fmt.Errorf("%w %s, see the error above", errStopped, s.Project.Name)
+				return fmt.Errorf("%w %s, see the error above", errStopped, s.title())
 			}
 		}
 	}

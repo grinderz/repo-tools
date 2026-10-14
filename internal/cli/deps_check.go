@@ -54,7 +54,10 @@ func depsCheckProject(rctx *run.Ctx, p *config.Project) (bool, bool) {
 	header := run.Arrow() + " " + run.Bold(p.Name)
 
 	cmds := rctx.Cfg.DepsCheckCommands(p)
-	if len(cmds) == 0 {
+	toolchain := rctx.Cfg.ToolchainCheckCommands(p)
+	pins := rctx.Cfg.PinsFor(p)
+
+	if len(cmds) == 0 && len(toolchain) == 0 && len(pins) == 0 {
 		fmt.Println(header + "  " + run.Dim("no checks for deps kind "+orNoneKind(p.Deps)))
 
 		return true, false
@@ -64,7 +67,9 @@ func depsCheckProject(rctx *run.Ctx, p *config.Project) (bool, bool) {
 	if reason := missingRepo(r); reason != "" {
 		fmt.Println(header + "  " + reason)
 
-		return false, true
+		// Pins alone are checked in the files, so without a clone there is
+		// nothing to run, as before pins; a command list is a check missed.
+		return len(cmds) == 0 && len(toolchain) == 0, len(cmds) > 0 || len(toolchain) > 0
 	}
 
 	fmt.Println(header)
@@ -81,6 +86,19 @@ func depsCheckProject(rctx *run.Ctx, p *config.Project) (bool, bool) {
 
 			ok = false
 		}
+	}
+
+	// The toolchain checks say whether the project is on the configured
+	// versions: behind is stale, like a lock file that needs regenerating.
+	tcOK, ran := toolchainCheckProject(rctx, r, p)
+	if ran && !tcOK {
+		ok = false
+	}
+
+	if len(cmds) == 0 && !ran {
+		fmt.Println("    " + run.Dim("no checks apply: none of the pinned files is here"))
+
+		return true, false
 	}
 
 	if ok {

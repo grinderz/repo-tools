@@ -307,7 +307,7 @@ func updateSubmodules(
 	}
 
 	if opts.NoCommit {
-		return reportUncommitted(r)
+		return reportUncommitted(r, "submodules already at the head of their branches")
 	}
 
 	msg := submodulesMessage(rctx, p, branch)
@@ -322,14 +322,14 @@ func submodulesMessage(rctx *run.Ctx, p *config.Project, branch string) string {
 
 // reportUncommitted prints what --no-commit left behind, since nothing else
 // in the run will show it.
-func reportUncommitted(r gitx.Repo) error {
+func reportUncommitted(r gitx.Repo, noChanges string) error {
 	changed, err := r.Git("status", "--porcelain")
 	if err != nil {
 		return err
 	}
 
 	if changed == "" {
-		fmt.Println("    submodules already at the head of their branches")
+		fmt.Println("    " + noChanges)
 
 		return nil
 	}

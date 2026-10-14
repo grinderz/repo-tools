@@ -195,6 +195,8 @@ func addCommands(root *cobra.Command, rctx *run.Ctx) {
 			newSubmodulesCmd(rctx, "submodules"),
 			newDepsStatusCmd(rctx, "status"),
 			newDepsCheckCmd(rctx, "check"),
+			newToolchainCmd(rctx, "toolchain"),
+			newRenovateCmd(rctx, "renovate"),
 		),
 		group("git", "Move commits between branches",
 			newCherryPickCmd(rctx, "cherry-pick"),
@@ -202,6 +204,7 @@ func addCommands(root *cobra.Command, rctx *run.Ctx) {
 			newRebaseCmd(rctx, "rebase"),
 		),
 		newFlowCmd(rctx, flowCmdName),
+		newConfigCmd("config"),
 	)
 }
 

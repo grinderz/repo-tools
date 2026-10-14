@@ -32,6 +32,10 @@ case "$1 $2" in
     if [ -f "$GLAB_LOG.mr" ]; then echo '[{"web_url":"https://gl/mr/1"}]'; else echo '[]'; fi ;;
   "mr create")
     touch "$GLAB_LOG.mr"; echo "Creating merge request for $4 into $6"; echo "https://gl/mr/1" ;;
+  "config get")
+    [ "$4" = "--host" ] || { echo "usage: glab config get <key> [--flags]"; echo "  -h --help"; exit 0; }
+    echo "A new version of glab is available" >&2 # the update check, once a day
+    echo "glpat-from-glab" ;;
   *) echo "unexpected: $*" >&2; exit 1 ;;
 esac
 `

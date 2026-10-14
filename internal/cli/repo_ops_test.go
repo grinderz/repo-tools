@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -222,6 +223,21 @@ func TestCheckRemoteAndWorktree(t *testing.T) {
 		t.Errorf("a clean branch in step with origin has no issues: %v", issues)
 	}
 
+	// origin's default branch, as the clone recorded it, has to be the dev
+	// branch: Renovate follows it for the internal modules.
+	git(t, f.parent, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
+
+	if joined := strings.Join(checkRemote(r, p), "\n"); !strings.Contains(joined,
+		"origin's default branch is master, dev_branch is develop: renovate's internal updates would follow master") {
+		t.Errorf("default branch: %q", joined)
+	}
+
+	git(t, f.parent, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/develop")
+
+	if joined := strings.Join(checkRemote(r, p), "\n"); strings.Contains(joined, "default branch") {
+		t.Errorf("default branch in step with dev_branch: %q", joined)
+	}
+
 	writeFile(t, f.parent, "app.txt", "local work\n")
 	commit(t, f.parent, "parent: unpushed")
 	writeFile(t, f.parent, "app.txt", "and uncommitted\n")
@@ -263,6 +279,35 @@ func TestCheckSubmodulesAgainstConfig(t *testing.T) {
 
 	if issues := checkSubmodules(testCtx(), r, p); len(issues) != 0 {
 		t.Errorf("without freezing an unconfigured submodule is fine: %v", issues)
+	}
+}
+
+// The programs a command runs are the first words of every stage of its
+// pipelines and lists, shell keywords and quoted scripts aside.
+func TestPipelinePrograms(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string][]string{
+		"go mod tidy":                                                          {"go"},
+		"set -o pipefail; git log | head -1":                                   {"git", "head"},
+		"make build 2>&1 | tee build.log":                                      {"make", "tee"},
+		"FOO=1 go test":                                                        {"go"},
+		"GOFLAGS=-mod=mod go mod tidy":                                         {"go"},
+		"echo `ls | wc -l` && uv lock":                                         {"echo", "uv"},
+		"[ -f docker/Dockerfile ] && perl -pi -e 's/a|b/c/; s/d/e/' f":         {"perl"},
+		"for f in go.mod go.work; do go mod edit -go=1.26.0 $f; done":          {"go"},
+		"case $x in a) make a;; *) make b;; esac":                              {"make"},
+		"case \"$k\" in go) go mod tidy;; py|python) uv lock;; esac; make":     {"go", "uv", "make"},
+		"(cd sub && make) || true":                                             {"make", "true"},
+		"if grep -q '^toolchain ' go.mod; then go mod edit -toolchain=go1; fi": {"grep", "go"},
+		"cd sub || exit 1":                                                     nil,
+		`echo "a;b" && ! uv lock`:                                              {"echo", "uv"},
+	}
+
+	for cmd, want := range cases {
+		if got := pipelinePrograms(cmd); !slices.Equal(got, want) {
+			t.Errorf("%q: got %q, want %q", cmd, got, want)
+		}
 	}
 }
 

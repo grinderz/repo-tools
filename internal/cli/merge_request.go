@@ -27,6 +27,7 @@ const (
 	mrCreate = "create"
 
 	cmdDepsSubmodules  = "deps submodules"
+	cmdDepsToolchain   = "deps toolchain"
 	cmdDepsFreeze      = "deps freeze"
 	cmdChangelogUpdate = "changelog update"
 )
