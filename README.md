@@ -25,9 +25,10 @@ detector), `make test.repeat` (twice in one process, shuffled),
 `make test.coverage` (`scripts/check-coverage.sh` fails the run below
 `GO_TEST_COVERAGE_THRESHOLD`),
 `make test.docker` / `make test.docker.coverage` (the same in the golang
-image), `make lint` (go vet, golangci-lint, shellcheck and the pre-commit
-hooks),
-`make lint.fix` and `make go.format`.
+image), `make lint` (go vet, golangci-lint, shellcheck, the `.gitattributes`
+check and the pre-commit hooks), `make lint.fix` and `make go.format`. The
+GitHub workflow in `.github/workflows/ci.yml` runs the linters and the
+coverage run on every push to master and every pull request.
 
 ## Configuration
 
@@ -1584,10 +1585,13 @@ make lint
 The cherry-pick tests build throwaway repositories with a real submodule and
 exercise the conflict resolution end to end. They run in parallel under the
 race detector; the few that swap `os.Stdout` or the colour switch stay serial
-and say so. `make lint` is `go vet`, golangci-lint 2.13.2 with
+and say so. `make lint` is `go vet`, golangci-lint 2.14.0 with
 `.golangci.yml` — every linter is on except a documented handful, and the
 gci/gofmt/gofumpt/goimports formatters are enforced (`make go.format` applies
-them, `make lint.fmt` only reports) — and the pre-commit hooks of
-`.pre-commit-config.yaml`, gitleaks among them (`make lint.pre-commit`, needs
-`uvx`). Errors wrap a sentinel at the fixed part of their sentence, so the
+them, `make lint.fmt` only reports) — shellcheck over `scripts/`, the
+`.gitattributes` rule check (`scripts/gitattributes-check.sh`: every tracked
+file needs a rule) and the pre-commit hooks of `.pre-commit-config.yaml`,
+gitleaks among them (`make lint.pre-commit`, needs `uvx`). CI (`.github/
+workflows/ci.yml`) runs the same targets in two jobs, lint and test, with
+the coverage report as an artifact. Errors wrap a sentinel at the fixed part of their sentence, so the
 text stays readable and `errors.Is` still works.

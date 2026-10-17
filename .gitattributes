@@ -13,6 +13,9 @@
 *.yaml     text
 *.yml      text
 
+# Scripts
+*.sh       text eol=lf
+
 # Go files: no line-ending magic
 *.go       -text diff=golang
 go.mod     text eol=lf

@@ -7,7 +7,7 @@ SHELL := bash
 # pinned; `go run` fetches the exact version on demand
 GO_GOLANGCI_LINT_VERSION ?= 2.14.0
 GO_GOLANGCI_LINT_TIMEOUT ?= 10m
-PRE_COMMIT_VERSION ?= 4.7
+PRE_COMMIT_VERSION ?= 4.7.0
 
 GO_GOLANGCI_LINT_CMD ?= go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v$(GO_GOLANGCI_LINT_VERSION)
 PRE_COMMIT ?= uvx pre-commit@$(PRE_COMMIT_VERSION)
@@ -108,7 +108,7 @@ deps.update.all.latest: ## Update all deps to the latest version
 
 
 .PHONY: lint
-lint: lint.vet lint.golangci lint.shellcheck lint.pre-commit ## Run all linters
+lint: lint.vet lint.golangci lint.shellcheck lint.gitattributes lint.pre-commit ## Run all linters
 
 .PHONY: lint.vet
 lint.vet: ## Run go vet
@@ -147,6 +147,10 @@ lint.shellcheck: ## Run shellcheck on the repo's shell scripts
 .PHONY: lint.pre-commit
 lint.pre-commit: ## Run the pre-commit hooks on every file
 	$(PRE_COMMIT) run --all-files
+
+.PHONY: lint.gitattributes
+lint.gitattributes: ## Check every tracked file has a .gitattributes rule
+	scripts/gitattributes-check.sh
 
 
 ##@ Test

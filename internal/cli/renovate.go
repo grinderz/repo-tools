@@ -1136,7 +1136,7 @@ func streamLines(cmd *exec.Cmd, logFile string, onLine func(string)) error {
 		return fmt.Errorf("%s: %w", cmd.Path, err)
 	}
 
-	var tee io.Writer = io.Discard //nolint:staticcheck // the type is the point: a file replaces it below
+	tee := io.Discard // an io.Writer; a file replaces it below
 
 	if logFile != "" {
 		// Appended: one run is a container per platform host, and the file
