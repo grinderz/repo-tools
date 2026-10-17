@@ -97,12 +97,6 @@ func planChangelog(rctx *run.Ctx, p *config.Project, branchOverride string) run.
 	return st
 }
 
-// changelogBranchRelease is the changelog_branch value meaning "this project's
-// release branch": whatever release_branch names, or the highest one on origin.
-// It keeps a per-release config from repeating the branch in two fields that
-// then drift apart.
-const changelogBranchRelease = "release"
-
 // changelogBranch resolves which branch the changelog is generated on: the
 // --branch flag, then changelog_branch (with "release" resolved against the
 // release branch), then the dev branch.
@@ -112,7 +106,7 @@ func changelogBranch(r gitx.Repo, p *config.Project, override string) (string, e
 	}
 
 	branch := p.ChangelogBranchOrDev()
-	if branch != changelogBranchRelease {
+	if branch != config.ChangelogBranchRelease {
 		return branch, nil
 	}
 

@@ -507,3 +507,29 @@ func TestStepsWithALabelInsteadOfAProject(t *testing.T) {
 		t.Errorf("a labelled step should run: ran=%v err=%v", ran, err)
 	}
 }
+
+// A version change paints what differs, from a component boundary, so the
+// shared prefix stays plain and 1.25.9 -> 1.26.0 marks 25.9 and 26.0.
+//
+//nolint:paralleltest // flips the process-wide colour switch
+func TestChange(t *testing.T) {
+	defer SetColor(false)
+
+	if got := Change("1.25.9", "1.26.0"); got != "1.25.9 -> 1.26.0" {
+		t.Errorf("colour off: %q", got)
+	}
+
+	SetColor(true)
+
+	if got := Change("1.25.9", "1.26.0"); got != "1.\x1b[31m25.9\x1b[0m -> 1.\x1b[32m26.0\x1b[0m" {
+		t.Errorf("from the component boundary: %q", got)
+	}
+
+	if got := Change("v7", "v10.3.0"); got != "\x1b[31mv7\x1b[0m -> \x1b[32mv10.3.0\x1b[0m" {
+		t.Errorf("no boundary before the change: %q", got)
+	}
+
+	if got := Change("0.1.0", "0.1.0"); got != "0.1.0 -> 0.1.0" {
+		t.Errorf("nothing differs, nothing painted: %q", got)
+	}
+}

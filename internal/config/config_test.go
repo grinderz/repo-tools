@@ -529,6 +529,67 @@ projects:
 	}
 }
 
+// release: false takes a project out of the releases altogether: its tags
+// and freezes go with it, whatever they say; defaults carry it too.
+func TestReleaseOffTakesTagsAndFreezeWithIt(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(write(t, `
+projects_dir: /p
+defaults:
+  deps_freeze: true
+projects:
+  - {name: released, git: g}
+  - {name: tooling, git: g2, release: false, release_tags: true}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if p := cfg.Projects[0]; !p.ReleaseEnabled() || !p.ReleaseTagsEnabled() || !p.DepsFreezeEnabled() {
+		t.Errorf("a project that says nothing is released, tagged and frozen: %+v", p)
+	}
+
+	if p := cfg.Projects[1]; p.ReleaseEnabled() || p.ReleaseTagsEnabled() || p.DepsFreezeEnabled() {
+		t.Errorf("release: false must switch the tags and the freeze off too: %+v", p)
+	}
+
+	cfg, err = Load(write(t, `
+projects_dir: /p
+defaults:
+  release: false
+projects:
+  - {name: a, git: g}
+  - {name: b, git: g2, release: true}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if cfg.Projects[0].ReleaseEnabled() || !cfg.Projects[1].ReleaseEnabled() {
+		t.Error("defaults.release applies where the project says nothing")
+	}
+
+	cases := []struct{ body, want string }{
+		{
+			"projects:\n  - {name: t, git: g, release: false, release_branch: release-1.0}\n",
+			"project t: release_branch \"release-1.0\" names a release the project does not have",
+		},
+		{
+			"cmds: {changelog: [x]}\nprojects:\n" +
+				"  - {name: t, git: g, release: false, changelog: true, changelog_branch: release}\n",
+			"project t: changelog_branch: release names a release the project does not have",
+		},
+	}
+
+	for _, tc := range cases {
+		_, err := Load(write(t, "projects_dir: /p\n"+tc.body))
+		if err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%q: err = %v, want %q", tc.body, err, tc.want)
+		}
+	}
+}
+
 // product_version is optional, but a template that asks for one must have it:
 // the alternative is a pushed tag reading "release 1.0.0 of {product_version}".
 func TestProductVersionMustBeSetWhenUsed(t *testing.T) {
@@ -980,6 +1041,15 @@ pins:
     match: '^PRE_COMMIT \?= (.+)$'
     value: "{go}"
     kinds: [go, none]
+  - file: .python-version
+    match: '^(.+)$'
+    value: "{go}"
+    except: [py]
+  - file: Makefile
+    match: '^CI_TOOLS \?= (.+)$'
+    value: "{ci_tools}"
+    kinds: [none]
+    except: [plain]
 projects:
   - name: lib
     git: g
@@ -993,6 +1063,10 @@ projects:
     deps: uv
   - name: plain
     git: i
+  - name: tooling
+    git: j
+    toolchain:
+      ci_tools: "0.1.1"
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -1003,24 +1077,49 @@ projects:
 		byName[p.Name] = p
 	}
 
-	if pins := cfg.PinsFor(byName["lib"]); len(pins) != 4 || pins[3].File != "Makefile" || !pins[1].Optional {
-		t.Errorf("lib pins = %+v, want the three global ones and its own", pins)
+	if pins := cfg.PinsFor(byName["lib"]); len(pins) != 5 || pins[4].File != "Makefile" || !pins[1].Optional {
+		t.Errorf("lib pins = %+v, want the four global ones and its own", pins)
 	}
 
 	if pins := cfg.PinsFor(byName["py"]); len(pins) != 1 || pins[0].File != "go.mod" {
-		t.Errorf("py pins = %+v, want only the pin without kinds", pins)
+		t.Errorf("py pins = %+v, want only the pin without kinds, the excepted one apart", pins)
 	}
 
-	if pins := cfg.PinsFor(byName["plain"]); len(pins) != 2 || pins[1].File != "Makefile" {
-		t.Errorf("plain pins = %+v, want the unkinded pin and the one for none", pins)
+	// plain has no ci_tools version and is excepted from the pin that wants
+	// one: kinds alone would have held it, and the load would have failed.
+	if pins := cfg.PinsFor(byName["plain"]); len(pins) != 3 || pins[1].File != "Makefile" {
+		t.Errorf("plain pins = %+v, want the unkinded pins and the one for none", pins)
 	}
 
-	tree := []string{"go.mod", "iam-pap/Dockerfile", "iam-sso/Dockerfile", "iam-pap/src/Dockerfile"}
+	if pins := cfg.PinsFor(byName["tooling"]); len(pins) != 4 || pins[3].Value != "{ci_tools}" {
+		t.Errorf("tooling pins = %+v, want the pin plain is excepted from", pins)
+	}
 
-	if got := (Pin{File: "iam-*/Dockerfile"}).Files(tree); strings.Join(
+	// Whether except leaves anyone is judged with the kinds the defaults give
+	// the projects, not the ones they write themselves.
+	if _, err := Load(write(t, `
+projects_dir: /p
+toolchain:
+  go: "1.26.0"
+cmds:
+  deps: {go: [x]}
+defaults:
+  deps: go
+pins:
+  - {file: go.mod, match: '^go (.+)$', value: "{go}", kinds: [go], except: [other]}
+projects:
+  - {name: api, git: g}
+  - {name: other, git: h, deps: none}
+`)); err != nil {
+		t.Errorf("a pin reaching a project through defaults.deps: %v", err)
+	}
+
+	tree := []string{"go.mod", "svc-api/Dockerfile", "svc-web/Dockerfile", "svc-api/src/Dockerfile"}
+
+	if got := (Pin{File: "svc-*/Dockerfile"}).Files(tree); strings.Join(
 		got,
 		",",
-	) != "iam-pap/Dockerfile,iam-sso/Dockerfile" {
+	) != "svc-api/Dockerfile,svc-web/Dockerfile" {
 		t.Errorf("glob files = %q", got)
 	}
 
@@ -1031,11 +1130,23 @@ projects:
 	cases := []struct{ body, want string }{
 		{"pins:\n  - {file: go.mod, match: 'go (.+)'}\n", "pins[0]: needs file, match and value"},
 		{"pins:\n  - {file: go.mod, match: 'go (.+', value: x}\n", "pins[0]: match:"},
-		{"pins:\n  - {file: 'iam-[/Dockerfile', match: 'go (.+)', value: x}\n", "pins[0]: file:"},
+		{"pins:\n  - {file: 'svc-[/Dockerfile', match: 'go (.+)', value: x}\n", "pins[0]: file:"},
 		{"pins:\n  - {file: go.mod, match: 'go (.+)\\.(.+)', value: x}\n", "needs exactly one capture group"},
 		{
 			"pins:\n  - {file: go.mod, match: 'go (.+)', value: x, kinds: [rust]}\n",
 			"kinds: \"rust\" is not a cmds.deps kind",
+		},
+		{
+			"pins:\n  - {file: go.mod, match: 'go (.+)', value: x, except: [nope]}\n",
+			"pins[0]: except: \"nope\" is not a project in this config",
+		},
+		{
+			"projects:\n  - {name: api, git: g, pins: [{file: f, match: 'v(.+)', value: x, except: [api]}]}\n",
+			"project api: pins[0]: except is for the global pins",
+		},
+		{
+			"pins:\n  - {file: go.mod, match: 'go (.+)', value: x, except: [api]}\n",
+			"pins[0]: except leaves no project the pin applies to",
 		},
 		{
 			"pins:\n  - {file: go.mod, match: 'go (.+)', value: '{rust}'}\n",

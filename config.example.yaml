@@ -64,8 +64,9 @@ toolchain_commit_message: "chore: bump toolchain to go {go_toolchain}, python {p
 # The lines those versions live on: deps toolchain writes the one capture
 # group of match, deps check reads it — one entry for both. A project without
 # the file skips the pin; a pin that matches nothing in a file the project
-# has is an error unless optional; kinds limits a pin to those deps kinds.
-# ^ and $ bind to lines, \n in a pattern crosses them.
+# has is an error unless optional; kinds limits a pin to those deps kinds,
+# except passes over the projects named. ^ and $ bind to lines, \n in a
+# pattern crosses them.
 pins:
   - {file: go.mod, match: '^go (.+)$', value: "{go}"}
   - {file: go.mod, match: '^toolchain go(.+)$', value: "{go_toolchain}", optional: true}
@@ -160,7 +161,7 @@ rebase_pin_commit_message: "chore(deps): pin rebased submodule branches"
 # empty unless template names one: Default reads
 # .gitlab/merge_request_templates/Default.md from the target branch and
 # expands the placeholders. assignees and reviewers are usernames —
-# mr_assignees and mr_reviewers on a project replace them.
+# mr_assignees and mr_reviewers on a project replace them, mr_branch the branch.
 merge_request:
   branch: "rt/{command}/{branch}/{date}"
   title: "{message}"
@@ -293,6 +294,8 @@ defaults:
   changelog: true
   deps_freeze: true
   release_tags: true      # release rc / release tag; on unless set to false
+  release: true           # the release commands and git cherry-pick at all; false
+                          # for a repository with no releases, tags and freezes go with it
 
 projects:
   # A shared makefile/tooling repository used as a submodule elsewhere.

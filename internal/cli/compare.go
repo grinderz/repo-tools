@@ -85,6 +85,12 @@ func compareProject(rctx *run.Ctx, p *config.Project, releaseBranch string, filt
 	header := run.Arrow() + " " + run.Bold(p.Name)
 	r := repoOf(p)
 
+	if !p.ReleaseEnabled() {
+		fmt.Println(header + "  " + releasesOff)
+
+		return
+	}
+
 	if reason := missingRepo(r); reason != "" {
 		fmt.Println(header + "  " + reason)
 

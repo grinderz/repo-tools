@@ -71,7 +71,7 @@ func ciStatusLine(rctx *run.Ctx, p *config.Project, override string) {
 		return
 	}
 
-	pipe, err := ciQuery(r, p.CI, sha, ref)
+	pipe, err := ciQuery(r, p.CI, ciRevision{SHA: sha, Ref: ref})
 	if err != nil {
 		fmt.Println(padCell(p.Name, statusNameWidth, nil) +
 			padCell(ref, statusBranchWidth, nil) + firstLine(err.Error()))

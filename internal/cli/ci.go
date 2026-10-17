@@ -68,6 +68,22 @@ const ciAppearWait = 2 * time.Minute
 // is the commit message, empty for a tag. No pipeline appearing is a warning,
 // not an error: a [skip ci] commit and a project without CI are both normal.
 func watchCI(rctx *run.Ctx, r gitx.Repo, p *config.Project, sha, ref, msg string) error {
+	return watchCIOn(rctx, r, p, ciRevision{SHA: sha, Ref: ref}, msg)
+}
+
+// ciRevision is what a watch follows: a commit on a ref, and whether the
+// push opened a merge request — whose own pipeline is then looked at
+// when the ref has none.
+type ciRevision struct {
+	SHA     string
+	Ref     string
+	Request bool
+}
+
+// watchCIOn is watchCI for a target of either kind.
+func watchCIOn(rctx *run.Ctx, r gitx.Repo, p *config.Project, target ciRevision, msg string) error {
+	ref := target.Ref
+
 	if rctx.NoCI || p.CI == config.CINone {
 		return nil
 	}
@@ -87,7 +103,7 @@ func watchCI(rctx *run.Ctx, r gitx.Repo, p *config.Project, sha, ref, msg string
 	announced := false
 
 	for {
-		pipe, err := ciQuery(r, p.CI, sha, ref)
+		pipe, err := ciQuery(r, p.CI, target)
 		if err != nil {
 			return fmt.Errorf("%s pipeline for %s: %w", p.CI, ref, err)
 		}
@@ -220,18 +236,33 @@ func ciReport(kind string, pipe ciPipeline, last *ciPipeline) (bool, error) {
 }
 
 // ciQuery asks the system's CLI about the pipeline of one revision.
-func ciQuery(r gitx.Repo, kind, sha, ref string) (ciPipeline, error) {
+func ciQuery(r gitx.Repo, kind string, target ciRevision) (ciPipeline, error) {
+	sha, ref := target.SHA, target.Ref
+
 	switch kind {
 	case config.CIGitLab:
-		out, err := r.Output("glab", "api",
-			fmt.Sprintf("projects/:id/pipelines?sha=%s&ref=%s", sha, url.QueryEscape(ref)))
+		pipe, err := gitlabPipeline(r, fmt.Sprintf("projects/:id/pipelines?sha=%s&ref=%s", sha, url.QueryEscape(ref)))
 		if err != nil {
 			return ciPipeline{}, err
 		}
 
-		pipe, err := parseGitLabPipelines(out)
-		if err != nil || pipe.State != ciRunning {
-			return pipe, err
+		// A repository whose rules run pipelines on merge requests alone
+		// has none on the branch: the request's own carries the commit, on
+		// a ref of the request's (refs/merge-requests/N/head). Only for a
+		// push that opened one: a tag or a branch head may share its
+		// commit with a request merged before, whose pipeline is not the
+		// one to wait for. (A merged-results pipeline runs on a commit of
+		// its own and is not found this way: the watch then warns that
+		// none appeared, as before.)
+		if pipe.State == ciMissing && target.Request {
+			pipe, err = gitlabPipeline(r, fmt.Sprintf("projects/:id/pipelines?sha=%s&source=merge_request_event", sha))
+			if err != nil {
+				return ciPipeline{}, err
+			}
+		}
+
+		if pipe.State != ciRunning {
+			return pipe, nil
 		}
 
 		// The job list is what gives the wait a shape; losing it is no
@@ -253,6 +284,16 @@ func ciQuery(r gitx.Repo, kind, sha, ref string) (ciPipeline, error) {
 	}
 
 	return ciPipeline{}, fmt.Errorf("%w %q", errUnknownCI, kind)
+}
+
+// gitlabPipeline is the newest pipeline a GitLab query lists.
+func gitlabPipeline(r gitx.Repo, query string) (ciPipeline, error) {
+	out, err := r.Output("glab", "api", query)
+	if err != nil {
+		return ciPipeline{}, err
+	}
+
+	return parseGitLabPipelines(out)
 }
 
 // ciRetry restarts the failed jobs of what just failed, the same thing the

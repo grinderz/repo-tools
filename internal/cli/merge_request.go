@@ -77,7 +77,7 @@ func planMergeRequest(rctx *run.Ctx, p *config.Project, command, target, msg str
 	vars[varMessage] = firstLine(msg)
 
 	m := &mergeRequest{
-		Branch:      expand(settings.Branch, vars),
+		Branch:      expand(rctx.Cfg.MRBranchFor(p), vars),
 		Target:      target,
 		Title:       expand(settings.Title, vars),
 		Description: expand(settings.Description, vars),

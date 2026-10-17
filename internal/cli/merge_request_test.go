@@ -32,6 +32,12 @@ case "$1 $2" in
     if [ -f "$GLAB_LOG.mr" ]; then echo '[{"web_url":"https://gl/mr/1"}]'; else echo '[]'; fi ;;
   "mr create")
     touch "$GLAB_LOG.mr"; echo "Creating merge request for $4 into $6"; echo "https://gl/mr/1" ;;
+  "api projects/:id/pipelines?"*)
+    # no pipeline on the branch, one on the merge request
+    case "$2" in
+      *source=merge_request_event*) echo '[{"id":9,"status":"success","web_url":"https://gl/p/9"}]' ;;
+      *) echo '[]' ;;
+    esac ;;
   "config get")
     [ "$4" = "--host" ] || { echo "usage: glab config get <key> [--flags]"; echo "  -h --help"; exit 0; }
     echo "A new version of glab is available" >&2 # the update check, once a day
@@ -192,6 +198,14 @@ func TestMergeRequestPlanAndCheck(t *testing.T) {
 	if !strings.Contains(lines[0], want) {
 		t.Errorf("plan line %q lacks %q", lines[0], want)
 	}
+
+	// A branch template of the project's own wins over the global one.
+	p.MRBranch = "own/{command}"
+	if own := planMergeRequest(rctx, p, cmdChangelogUpdate, "release-1.0", "x"); own.Branch != "own/changelog-update" {
+		t.Errorf("mr_branch: %q", own.Branch)
+	}
+
+	p.MRBranch = ""
 
 	m := planMergeRequest(rctx, p, cmdChangelogUpdate, "release-1.0", "chore: changelog\n\nbody")
 	if m.Title != "chore: changelog" {

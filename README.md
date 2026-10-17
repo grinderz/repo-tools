@@ -93,7 +93,7 @@ merge_request:                # the MRs mr: always opens, see below
   title: "{message}"
   description: ""             # body template; empty leaves it to template, or empty
   template: ""                # a repository MR template to use as the body, e.g. Default
-  assignees: []               # usernames; mr_assignees on a project overrides
+  assignees: []               # usernames; mr_assignees on a project overrides (mr_branch likewise for branch)
   reviewers: []               # same, mr_reviewers
   wait: dependents            # wait for the merge: dependents | always | none
   wait_minutes: 60
@@ -147,6 +147,7 @@ defaults:                     # per-project settings, see below
   changelog: true
   deps_freeze: true
   release_tags: true          # rc and final tags; on unless set to false
+  release: true               # the release commands at all; false for a repository with no releases
 
 projects:
   - name: pylib               # order matters, see below
@@ -284,7 +285,9 @@ one run, for the projects that leave `mr` unset) the committing commands —
 `deps submodules`, `deps freeze`, `changelog update` — put the commit on a
 branch of their own instead of pushing to the target branch, push it, open
 the request into the target through `glab` or `gh` (so the project needs
-`ci: gitlab` or `ci: github`), and watch the pipeline the request starts.
+`ci: gitlab` or `ci: github`), and watch the pipeline the request starts —
+on the branch, or, where the repository's rules run pipelines on merge
+requests alone, the request's own.
 `mr: none` is final: a project whose dev branch takes pushes, or whose CI
 runs no request pipelines, stays out even under `--mr`. The branch comes from
 the `merge_request.branch` template, `rt/{command}/{branch}/{date}` by
@@ -299,7 +302,8 @@ branch, expands the placeholders in it and sends it as the body; `repo check`
 reports a named template the branch lacks. Off by default, since a template
 usually mentions people. And
 `merge_request.assignees` / `.reviewers` name who gets it (`mr_assignees` /
-`mr_reviewers` on a project replace the lists). A rerun on the same day
+`mr_reviewers` on a project replace the lists, `mr_branch` the branch
+template: a public repository's branches need not carry the work ticket). A rerun on the same day
 rewrites the branch with one
 fresh commit and updates the request already open for it rather than opening
 a second one. The diff review shows the request with the message and asks
@@ -448,10 +452,10 @@ out. History is only read when the template asks
 for it, and the placeholders are all available in both tag messages.
 
 **Defaults.** `dev_branch`, `release_branch_prefix`, `deps`, `changelog_branch`,
-`changelog`, `deps_freeze` and `release_tags` can be set once under `defaults`
-instead of being repeated in every project. Precedence is project field, then
-`defaults`, then the built-in value: `develop`, `release-`, `none`, both
-changelog/freeze toggles off, and `release_tags` on. An explicit
+`changelog`, `deps_freeze`, `release_tags` and `release` can be set once under
+`defaults` instead of being repeated in every project. Precedence is project
+field, then `defaults`, then the built-in value: `develop`, `release-`, `none`,
+both changelog/freeze toggles off, and `release_tags` and `release` on. An explicit
 `changelog: false` in a project overrides `defaults.changelog: true` — the
 fields distinguish "unset" from "set to false".
 
@@ -470,6 +474,18 @@ other than what the config describes — run `rt deps freeze` first.
 still gets a release branch, a frozen set of submodules and cherry-picks. That
 fits a library consumed by branch rather than by version, which would otherwise
 collect tags nobody reads.
+
+**Projects that are not released.** `release: false` takes a project out of
+the releases altogether: `rt release branch`, `rt release rc`, `rt release tag`,
+`rt release status`, `rt release notes`, `rt deps freeze` and `rt git compare`
+skip it and `rt git cherry-pick` refuses it (`releases are off for this
+project`; `--list` shows the skip), its `release_tags` and `deps_freeze` count
+as off whatever they say, and `repo check` judges its submodules on the
+working tree and asks for no freeze settings. A `release_branch`, or
+`changelog_branch: release` with the changelog on, is refused for it at load.
+The other commands — sync, changelog, submodules, toolchain, renovate — see it
+as before. That fits a repository edited by hand and seldom, the one that
+builds the CI images, say, which has nothing to cut a release from.
 
 ## Rules that apply to every command
 
@@ -1116,8 +1132,11 @@ both directions: `rt deps toolchain` writes the group, `rt deps check` reads
 it and reports `pin .gitlab-ci.yml:33: 0.1.0 -> 0.1.1` for a project behind.
 A project without the file skips the pin, and `kinds` keeps a pin to the
 projects of those deps kinds (`GO_VERSION` is a go project's line; `none`
-names the projects without a kind). `file` may be a glob, `iam-*/Dockerfile`,
-for the same line in several files. A pin
+names the projects without a kind); `except` names the projects a global
+pin passes over (the repository that builds the ci-tools images has no
+`CI_TOOLS_VERSION` line in its CI file) — names of the config, on the global
+pins only, and not every project the pin would reach. `file` may be a glob,
+`svc-*/Dockerfile`, for the same line in several files. A pin
 whose pattern matches nothing in a file the project does have is an error,
 not a no-op — a bump that quietly did not happen is what this is for — unless
 the pin says `optional: true` for a line only some projects carry. The files
@@ -1144,9 +1163,13 @@ that is not one word (`1.26.2`, `0.12`, a codename like `trixie`) or is
 `latest`, a `{<key>_next_minor}` for a version with no minor number, a key
 named `branch` or another common placeholder, a pattern that does not
 compile or has other than one group, and a kind that is not a `cmds.deps`
-kind. The plan lists the pins the branch has a
-file for, with the version each gets, and names the versions in use:
-`toolchain: go 1.26.0, go_toolchain 1.26.2`. `cmds.toolchain_check` is
+kind. The plan reads the pins' files on the branch and lists every
+version line with the toolchain key the pin writes: `pin
+.gitlab-ci.yml:27 ci_tools: 0.1.0 -> 0.1.1` where it would move (the
+digits that differ in colour, the way yay shows an upgrade; `deps check`
+and the bump itself print the same), the value alone and dim where it
+stays, and a required line that is not there; it names the versions in
+use: `toolchain: go 1.26.0, go_toolchain 1.26.2`. `cmds.toolchain_check` is
 still there for a check no pin can express, run by `deps check` after the
 pins.
 
@@ -1284,7 +1307,8 @@ it, `--local-config` skips the project. The plan names the level:
 `--group all|separate` says how the updates are cut into merge requests;
 `renovate.group` in the config is the default, `all` when unset. `all` puts
 every update of a project in one merge request, on `renovate/dependencies`
-(`renovate/patch-dependencies` at the patch level), with a `groupName` rule
+(`renovate/patch-dependencies` at the patch level; a `branchPrefix` in the
+file or its preset replaces the `renovate/`), with a `groupName` rule
 rt appends after the project's own rules — a later rule wins in Renovate,
 so a group of the file's own does not split its packages off, and a file
 needs no group rule of its own. `separate` adds nothing: one merge request
@@ -1358,6 +1382,7 @@ submodules` and `deps freeze` own the internal modules. The `go` and
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", ":semanticCommitsDisabled"],
   "commitMessagePrefix": "build/AB-0000:",
+  "branchPrefix": "build/AB-0000-",
   "dependencyDashboard": false,
   "enabledManagers": ["gomod", "pep621"],
   "postUpdateOptions": ["gomodTidy"],

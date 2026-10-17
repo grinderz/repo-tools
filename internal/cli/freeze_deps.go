@@ -65,6 +65,19 @@ func newFreezeDepsCmd(rctx *run.Ctx, name string) *cobra.Command {
 	return c
 }
 
+// freezeSkip is why a project is not frozen before anything is fetched: no
+// releases, no freeze, no clone.
+func freezeSkip(r gitx.Repo, p *config.Project) string {
+	switch {
+	case !p.ReleaseEnabled():
+		return releasesOff
+	case !p.DepsFreezeEnabled():
+		return "deps_freeze is disabled for this project"
+	default:
+		return missingRepo(r)
+	}
+}
+
 func planFreezeDeps(
 	rctx *run.Ctx,
 	p *config.Project,
@@ -74,13 +87,7 @@ func planFreezeDeps(
 	r := repoOf(p)
 	st := run.Step{Project: p}
 
-	if !p.DepsFreezeEnabled() {
-		st.Skip, st.Warn = true, "deps_freeze is disabled for this project"
-
-		return st, nil
-	}
-
-	if reason := missingRepo(r); reason != "" {
+	if reason := freezeSkip(r, p); reason != "" {
 		st.Skip, st.Warn = true, reason
 
 		return st, nil
@@ -458,7 +465,7 @@ func commitAndPush(rctx *run.Ctx, r gitx.Repo, p *config.Project, command, branc
 			return err
 		}
 
-		if err := watchCI(rctx, r, p, sha, m.Branch, msg); err != nil {
+		if err := watchCIOn(rctx, r, p, ciRevision{SHA: sha, Ref: m.Branch, Request: true}, msg); err != nil {
 			return err
 		}
 

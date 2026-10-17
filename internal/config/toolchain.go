@@ -30,10 +30,11 @@ var toolchainVersionRe = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]*$`)
 // {{.Id}}, { print }) is the shell's, sed's or go template's.
 var placeholderRe = regexp.MustCompile(`\{([A-Za-z][A-Za-z0-9_-]*)\}`)
 
-// placeholdersIn names the placeholders of a template. A shell parameter
-// of the same shape, ${home}, is the shell's: expand would still replace
-// one named like a key, so a command keeps to parameters that are not.
-func placeholdersIn(tpl string) []string {
+// PlaceholdersIn names the placeholders of a template, as written. A shell
+// parameter of the same shape, ${home}, is the shell's: expand would still
+// replace one named like a key, so a command keeps to parameters that are
+// not.
+func PlaceholdersIn(tpl string) []string {
 	var names []string
 
 	for _, m := range placeholderRe.FindAllStringSubmatchIndex(tpl, -1) {
@@ -170,7 +171,7 @@ func (c *Config) validateProjectToolchain(p *Project) error {
 	}
 
 	for _, tpl := range templates {
-		for _, name := range placeholdersIn(tpl) {
+		for _, name := range PlaceholdersIn(tpl) {
 			if commonPlaceholders[name] {
 				continue
 			}
@@ -237,7 +238,7 @@ func ToolchainKeysIn(templates []string) []string {
 	keys := map[string]bool{}
 
 	for _, tpl := range templates {
-		for _, name := range placeholdersIn(tpl) {
+		for _, name := range PlaceholdersIn(tpl) {
 			if !commonPlaceholders[name] {
 				keys[ToolchainKey(name)] = true
 			}

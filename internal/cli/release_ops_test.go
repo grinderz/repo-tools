@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -355,6 +356,84 @@ func TestPrintCandidatesNumbering(t *testing.T) {
 
 	if strings.Contains(plain, "  1  aaa1111") {
 		t.Errorf("a listing must not be numbered: %q", plain)
+	}
+}
+
+// A project with release: false is a skip for release branch and both tag
+// commands, with the one reason.
+func TestPlanReleaseSkipsProjectsWithReleasesOff(t *testing.T) {
+	t.Parallel()
+
+	f := newFixture(t)
+	p := f.project(t)
+	off := false
+	p.Release = &off
+
+	step, err := planReleaseBranch(testCtx(), p, "", false)
+	if err != nil || !step.Skip || step.Warn != releasesOff || step.Exec != nil {
+		t.Errorf("release branch: err=%v skip=%v warn=%q", err, step.Skip, step.Warn)
+	}
+
+	for _, kind := range []tagKind{tagRC, tagFinal} {
+		step, _ := planTag(testCtx(), p, kind, "", "")
+		if !step.Skip || step.Warn != releasesOff || step.Exec != nil {
+			t.Errorf("kind %v: skip=%v warn=%q", kind, step.Skip, step.Warn)
+		}
+	}
+
+	on := true
+	p.DepsFreeze = &on
+
+	step, err = planFreezeDeps(testCtx(), p, "", false, false)
+	if err != nil || !step.Skip || step.Warn != releasesOff {
+		t.Errorf(
+			"deps freeze: err=%v skip=%v warn=%q, want the release reason over the freeze one",
+			err,
+			step.Skip,
+			step.Warn,
+		)
+	}
+
+	if got := notesSection(testCtx(), p, ""); !strings.Contains(got, "_"+releasesOff+"_") {
+		t.Errorf("release notes = %q", got)
+	}
+}
+
+// The read-only commands say the same of a project with release: false,
+// before looking at its clone: the fixture's clone is removed first, which
+// would otherwise be the first complaint.
+func TestReleaseOffAcrossTheReadOnlyCommands(t *testing.T) { //nolint:paralleltest // captureOutput swaps os.Stdout
+	f := newFixture(t)
+	p := f.project(t)
+	off := false
+	p.Release = &off
+	rctx := ctxFor(p)
+
+	if err := os.RemoveAll(p.Dir()); err != nil {
+		t.Fatal(err)
+	}
+
+	if ref, pending := freezeRef(repoOf(p), p); ref != "" || pending != "" {
+		t.Errorf("repo check judges the working tree: ref=%q pending=%q", ref, pending)
+	}
+
+	err := runCherryPick(rctx, "cherry-pick", []string{p.Name}, "", pickFilter{})
+	if err == nil || !strings.Contains(err.Error(), releasesOff) {
+		t.Errorf("cherry-pick = %v, want a refusal", err)
+	}
+
+	out := captureOutput(t, func() {
+		releaseStatusRow(rctx, p, "", map[string]bool{})
+		listProjectCandidates(rctx, p, "", pickFilter{})
+		compareProject(rctx, p, "", pickFilter{})
+	})
+
+	if n := strings.Count(out, releasesOff); n != 3 {
+		t.Errorf("release status, cherry-pick --list and git compare: %d mention(s) of the reason in %q", n, out)
+	}
+
+	if strings.Contains(out, "not cloned") {
+		t.Errorf("the missing clone must not be reached: %q", out)
 	}
 }
 

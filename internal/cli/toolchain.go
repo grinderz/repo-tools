@@ -100,7 +100,7 @@ func planToolchain(rctx *run.Ctx, p *config.Project, opts toolchainOpts) (run.St
 		return st, nil
 	}
 
-	pins, err := pinsAt(r, ref, rctx.Cfg.PinsFor(p))
+	pins, paths, err := pinsAt(r, ref, rctx.Cfg.PinsFor(p))
 	if err != nil {
 		return st, err
 	}
@@ -119,7 +119,7 @@ func planToolchain(rctx *run.Ctx, p *config.Project, opts toolchainOpts) (run.St
 	templates := append(slices.Clone(cmds), config.PinValues(pins)...)
 
 	st.Plan = append(st.Plan, "checkout "+planRef(branch), "toolchain: "+toolchainSummary(rctx, p, templates))
-	st.Plan = append(st.Plan, pinPlanLines(pins, vars)...)
+	st.Plan = append(st.Plan, pinPlanLines(r, ref, paths, pins, vars)...)
 	st.Plan = append(st.Plan, direnvPlanLines(rctx, r)...)
 
 	for _, kind := range rctx.Cfg.ToolchainKinds(p) {

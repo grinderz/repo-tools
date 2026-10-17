@@ -59,9 +59,19 @@ func newReleaseBranchCmd(rctx *run.Ctx, name string) *cobra.Command {
 	return c
 }
 
+// releasesOff is the skip of a project with release: false, the same in
+// every release command.
+const releasesOff = "releases are off for this project"
+
 func planReleaseBranch(rctx *run.Ctx, p *config.Project, version string, major bool) (run.Step, error) {
 	r := repoOf(p)
 	st := run.Step{Project: p}
+
+	if !p.ReleaseEnabled() {
+		st.Skip, st.Warn = true, releasesOff
+
+		return st, nil
+	}
 
 	if reason := missingRepo(r); reason != "" {
 		st.Skip, st.Warn = true, reason

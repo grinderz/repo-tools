@@ -97,6 +97,7 @@ type Defaults struct {
 	Changelog           *bool  `yaml:"changelog"`
 	DepsFreeze          *bool  `yaml:"deps_freeze"`
 	ReleaseTags         *bool  `yaml:"release_tags"`
+	Release             *bool  `yaml:"release"`
 	Fetch               *bool  `yaml:"fetch"`
 	Renovate            *bool  `yaml:"renovate"`
 	ReleaseBranchPrefix string `yaml:"release_branch_prefix"`
@@ -111,6 +112,7 @@ type Project struct {
 	// none. Default none — the watch is opt-in; --no-ci skips it for one run.
 	CI              string            `yaml:"ci"`
 	MR              string            `yaml:"mr"`           // always | none | unset: only under --mr
+	MRBranch        string            `yaml:"mr_branch"`    // replaces merge_request.branch, the same placeholders
 	MRAssignees     []string          `yaml:"mr_assignees"` // replaces merge_request.assignees
 	MRReviewers     []string          `yaml:"mr_reviewers"` // replaces merge_request.reviewers
 	DevBranch       string            `yaml:"dev_branch"`
@@ -136,6 +138,11 @@ type Project struct {
 	// Unlike the other toggles it defaults to on: a library that is consumed
 	// by branch rather than by version sets it to false.
 	ReleaseTags *bool `yaml:"release_tags"`
+	// Release says the project has releases at all: the release commands and
+	// git cherry-pick skip one with false, and its tags and freezes are off
+	// with it. Unset means yes. A repository edited by hand and seldom, with
+	// nothing to cut a release from, sets it to false.
+	Release *bool `yaml:"release"`
 	// Renovate lets deps renovate include the project; nil means yes.
 	Renovate *bool `yaml:"renovate"`
 	// Toolchain overrides the global versions entry by entry, for a project
@@ -411,6 +418,17 @@ type Config struct {
 	Projects []*Project `yaml:"projects"`
 }
 
+// MRBranchFor is the branch template a project's requests are made on:
+// its own when it has one — a public repository's branch names need not
+// carry the work ticket — the global one otherwise.
+func (c *Config) MRBranchFor(p *Project) string {
+	if p.MRBranch != "" {
+		return p.MRBranch
+	}
+
+	return c.MergeRequest.Branch
+}
+
 // MRAssigneesFor and MRReviewersFor are who a project's requests go to: its
 // own list when it has one, the global one otherwise.
 func (c *Config) MRAssigneesFor(p *Project) []string {
@@ -633,7 +651,13 @@ func (p *Project) RenovateEnabled() bool { return p.Renovate == nil || *p.Renova
 func (p *Project) RenovateRequired() bool { return p.Renovate != nil && *p.Renovate }
 
 // DepsFreezeEnabled reports whether deps freeze should run for this project.
-func (p *Project) DepsFreezeEnabled() bool { return p.DepsFreeze != nil && *p.DepsFreeze }
+func (p *Project) DepsFreezeEnabled() bool {
+	return p.ReleaseEnabled() && p.DepsFreeze != nil && *p.DepsFreeze
+}
+
+// ReleaseEnabled reports whether the project has releases: the release
+// commands and git cherry-pick cover it. Unset means yes.
+func (p *Project) ReleaseEnabled() bool { return p.Release == nil || *p.Release }
 
 // FetchAllowed reports whether commands may fetch this project. Unset means
 // yes: the command's own default then decides.
@@ -641,7 +665,9 @@ func (p *Project) FetchAllowed() bool { return p.Fetch == nil || *p.Fetch }
 
 // ReleaseTagsEnabled reports whether the two tagging commands, release rc and
 // release tag, cover this project. Unset means yes, which most projects want.
-func (p *Project) ReleaseTagsEnabled() bool { return p.ReleaseTags == nil || *p.ReleaseTags }
+func (p *Project) ReleaseTagsEnabled() bool {
+	return p.ReleaseEnabled() && (p.ReleaseTags == nil || *p.ReleaseTags)
+}
 
 // TargetBranch is the branch this project works on in this config: the release
 // branch when the config names one, its dev branch otherwise.
@@ -652,6 +678,36 @@ func (p *Project) TargetBranch() string {
 
 	return p.DevBranch
 }
+
+// validateProjectRelease checks what the project says about its release.
+// The branch itself may not exist yet, but its name has to be the shape the
+// version arithmetic reads, or rc and tag would have nothing to count from;
+// a project out of the releases has no release branch to name and no release
+// branch to write its changelog on.
+func validateProjectRelease(p *Project) error {
+	if p.ReleaseEnabled() {
+		if p.ReleaseBranch != "" && !strings.HasPrefix(p.ReleaseBranch, p.ReleaseBranchPrefix) {
+			return fmt.Errorf("project %s: release_branch %q %w %q",
+				p.Name, p.ReleaseBranch, errBadPrefix, p.ReleaseBranchPrefix)
+		}
+
+		return nil
+	}
+
+	if p.ReleaseBranch != "" {
+		return fmt.Errorf("project %s: release_branch %q %w", p.Name, p.ReleaseBranch, errReleaseOff)
+	}
+
+	if p.ChangelogEnabled() && p.ChangelogBranchOrDev() == ChangelogBranchRelease {
+		return fmt.Errorf("project %s: changelog_branch: release %w", p.Name, errReleaseOff)
+	}
+
+	return nil
+}
+
+// ChangelogBranchRelease is the changelog_branch value that means the
+// project's release branch.
+const ChangelogBranchRelease = "release"
 
 func (p *Project) ChangelogBranchOrDev() string {
 	if p.ChangelogBranch != "" {
@@ -713,6 +769,10 @@ func Load(path string) (*Config, error) {
 		if err := cfg.prepareProject(p); err != nil {
 			return nil, err
 		}
+	}
+
+	if err := cfg.validatePinsReach(); err != nil {
+		return nil, err
 	}
 
 	return &cfg, nil
@@ -988,6 +1048,10 @@ func (c *Config) applyProjectDefaults(p *Project) {
 		p.ReleaseTags = def.ReleaseTags
 	}
 
+	if p.Release == nil {
+		p.Release = def.Release
+	}
+
 	if p.Fetch == nil {
 		p.Fetch = def.Fetch
 	}
@@ -1023,6 +1087,10 @@ func (c *Config) prepareProject(p *Project) error {
 		return err
 	}
 
+	if err := validateProjectRelease(p); err != nil {
+		return err
+	}
+
 	// A project with its own cmds.deps names the commands outright, so its
 	// deps kind no longer has to resolve to anything.
 	if len(p.Cmds.Deps) == 0 {
@@ -1046,13 +1114,6 @@ func (c *Config) prepareProject(p *Project) error {
 
 	if p.ChangelogEnabled() && len(c.ChangelogCommands(p)) == 0 {
 		return fmt.Errorf("project %s: %w", p.Name, errNoChangelogCmds)
-	}
-
-	// The branch itself may not exist yet, but its name has to be the shape the
-	// version arithmetic reads, or rc and tag would have nothing to count from.
-	if p.ReleaseBranch != "" && !strings.HasPrefix(p.ReleaseBranch, p.ReleaseBranchPrefix) {
-		return fmt.Errorf("project %s: release_branch %q %w %q",
-			p.Name, p.ReleaseBranch, errBadPrefix, p.ReleaseBranchPrefix)
 	}
 
 	for _, s := range p.Submodules {

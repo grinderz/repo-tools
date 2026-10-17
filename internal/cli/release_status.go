@@ -90,6 +90,12 @@ func padCell(text string, width int, paint func(string) string) string {
 func releaseStatusRow(rctx *run.Ctx, p *config.Project, override string, fetched map[string]bool) {
 	r := repoOf(p)
 
+	if !p.ReleaseEnabled() {
+		fmt.Println(padCell(p.Name, statusNameWidth, nil) + releasesOff)
+
+		return
+	}
+
 	if reason := missingRepo(r); reason != "" {
 		fmt.Println(padCell(p.Name, statusNameWidth, nil) + reason)
 
@@ -286,7 +292,7 @@ func ciCell(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch string) (strin
 		return "-", ""
 	}
 
-	pipe, err := ciQuery(r, p.CI, sha, branch)
+	pipe, err := ciQuery(r, p.CI, ciRevision{SHA: sha, Ref: branch})
 	if err != nil {
 		return run.Yellow("error"), firstLine(err.Error())
 	}

@@ -177,7 +177,7 @@ func checkRemote(r gitx.Repo, p *config.Project) []string {
 
 	// "release" is resolved per project, and the release branch may not exist
 	// yet; the pending-branch check above already covers that case.
-	if cb := p.ChangelogBranch; cb != "" && cb != changelogBranchRelease && !r.RemoteBranchExists(cb) {
+	if cb := p.ChangelogBranch; cb != "" && cb != config.ChangelogBranchRelease && !r.RemoteBranchExists(cb) {
 		issues = append(issues, fmt.Sprintf("origin/%s (changelog_branch) does not exist", cb))
 	}
 
@@ -259,10 +259,14 @@ func checkSubmodules(rctx *run.Ctx, r gitx.Repo, p *config.Project) []string {
 }
 
 // freezeRef is the revision deps freeze would work on. It returns an empty ref
-// when there is no release branch at all and the working tree has to do, and
-// the pending-branch complaint when the config names one that does not exist
-// yet.
+// when there is no release branch at all — or no release, release: false —
+// and the working tree has to do, and the pending-branch complaint when the
+// config names one that does not exist yet.
 func freezeRef(r gitx.Repo, p *config.Project) (string, string) {
+	if !p.ReleaseEnabled() {
+		return "", ""
+	}
+
 	branch, _, err := latestRelease(r, p, "")
 	if err != nil {
 		return "", ""

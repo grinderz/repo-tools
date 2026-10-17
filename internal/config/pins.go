@@ -18,7 +18,7 @@ import (
 
 // Pin is one version line.
 type Pin struct {
-	// File is the path in the repository, or a glob (iam-*/Dockerfile) for
+	// File is the path in the repository, or a glob (svc-*/Dockerfile) for
 	// the same line in several files; a project without the file skips the
 	// pin.
 	File string `yaml:"file"`
@@ -31,6 +31,9 @@ type Pin struct {
 	// for the projects without one; empty means every project that has the
 	// file.
 	Kinds []string `yaml:"kinds"`
+	// Except names the projects a global pin passes over: the repository
+	// that builds the ci-tools images has no CI_TOOLS_VERSION line.
+	Except []string `yaml:"except"`
 	// Optional allows the file to lack the line: nothing matched is then not
 	// an error. Without it the pin has to find its line in every file it is
 	// applied to.
@@ -70,8 +73,13 @@ func (pin Pin) Regexp() *regexp.Regexp {
 	return regexp.MustCompile("(?m)" + pin.Match)
 }
 
-// Applies says whether the pin is for a project of this deps kind.
+// Applies says whether the pin is for a project: one of its deps kinds,
+// and not named in except.
 func (pin Pin) Applies(p *Project) bool {
+	if slices.Contains(pin.Except, p.Name) {
+		return false
+	}
+
 	kind := p.Deps
 	if kind == "" {
 		kind = DepsNone
@@ -95,10 +103,16 @@ func (c *Config) PinsFor(p *Project) []Pin {
 }
 
 // validatePins checks that every pin can be applied: the three fields, a
-// pattern that compiles with one group, kinds that are deps kinds.
+// pattern that compiles with one group, kinds that are deps kinds, except
+// naming projects of the config and only on the global pins — a project's
+// own pin is for that project.
 func (c *Config) validatePins(pins []Pin, where string) error {
 	for i, pin := range pins {
 		entry := fmt.Sprintf("%s[%d]", where, i)
+
+		if err := c.validatePinExcept(pin, entry, where == "pins"); err != nil {
+			return err
+		}
 
 		if pin.File == "" || pin.Match == "" || pin.Value == "" {
 			return fmt.Errorf("%s: %w", entry, errBadPin)
@@ -122,6 +136,39 @@ func (c *Config) validatePins(pins []Pin, where string) error {
 				return fmt.Errorf("%s: kinds: %q %w (defined: %s, none)",
 					entry, kind, errNotDepsKind, strings.Join(c.DepsKinds(), ", "))
 			}
+		}
+	}
+
+	return nil
+}
+
+// validatePinExcept checks a pin's except list.
+func (c *Config) validatePinExcept(pin Pin, entry string, global bool) error {
+	if len(pin.Except) == 0 {
+		return nil
+	}
+
+	if !global {
+		return fmt.Errorf("%s: except %w", entry, errExceptOnProjectPin)
+	}
+
+	for _, name := range pin.Except {
+		if !slices.ContainsFunc(c.Projects, func(p *Project) bool { return p.Name == name }) {
+			return fmt.Errorf("%s: except: %q %w", entry, name, errNotAProject)
+		}
+	}
+
+	return nil
+}
+
+// validatePinsReach refuses a global pin whose except leaves no project it
+// applies to: a pin nobody is held to is a bump that quietly does not
+// happen. It runs once the projects carry their defaults, since a kind may
+// come from there.
+func (c *Config) validatePinsReach() error {
+	for i, pin := range c.Pins {
+		if len(pin.Except) > 0 && !slices.ContainsFunc(c.Projects, pin.Applies) {
+			return fmt.Errorf("pins[%d]: except %w", i, errExceptEveryone)
 		}
 	}
 

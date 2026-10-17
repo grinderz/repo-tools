@@ -80,6 +80,10 @@ func tagTarget(
 	p *config.Project,
 	releaseBranch string,
 ) (string, gitx.ReleaseVer, string, error) {
+	if !p.ReleaseEnabled() {
+		return "", gitx.ReleaseVer{}, releasesOff, nil
+	}
+
 	if !p.ReleaseTagsEnabled() {
 		return "", gitx.ReleaseVer{}, "release tags are disabled for this project", nil
 	}

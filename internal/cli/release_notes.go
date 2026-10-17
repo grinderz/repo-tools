@@ -58,6 +58,10 @@ func notesSection(rctx *run.Ctx, p *config.Project, releaseBranch string) string
 	heading := "## " + p.Name + "\n\n"
 	r := repoOf(p)
 
+	if !p.ReleaseEnabled() {
+		return heading + "_" + releasesOff + "_\n"
+	}
+
 	if reason := missingRepo(r); reason != "" {
 		return heading + "_" + reason + "_\n"
 	}

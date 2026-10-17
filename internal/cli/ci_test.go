@@ -2,6 +2,9 @@ package cli
 
 import (
 	"testing"
+
+	"github.com/grinderz/repo-tools/internal/config"
+	"github.com/grinderz/repo-tools/internal/gitx"
 )
 
 // The GitLab answer is a list with the newest pipeline first; every status
@@ -168,5 +171,27 @@ func TestSkipCICommit(t *testing.T) {
 
 	if skipCICommit("feat: skip ci setup for now") {
 		t.Error("the words without the brackets are just words")
+	}
+}
+
+// A repository that runs pipelines on merge requests alone has none on the
+// branch, so the watch falls back to the request's own pipeline.
+//
+//nolint:paralleltest // fakeGlab sets PATH
+func TestCIQueryFallsBackToTheMergeRequestPipeline(t *testing.T) {
+	fakeGlab(t)
+
+	r := gitx.Repo{Dir: t.TempDir()}
+
+	pipe, err := ciQuery(r, config.CIGitLab, ciRevision{SHA: "abc123", Ref: "build/AB-1", Request: true})
+	if err != nil || pipe.State != ciSuccess || pipe.Label != "pipeline #9" || pipe.URL != "https://gl/p/9" {
+		t.Errorf("pipe = %+v, err = %v", pipe, err)
+	}
+
+	// A push that opened no request looks at the ref alone: a tag on a
+	// commit a request carried before must not take that request's result.
+	if pipe, err := ciQuery(r, config.CIGitLab, ciRevision{SHA: "abc123", Ref: "v1.0.0"}); err != nil ||
+		pipe.State != ciMissing {
+		t.Errorf("no request: pipe = %+v, err = %v", pipe, err)
 	}
 }

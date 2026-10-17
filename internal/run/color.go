@@ -69,6 +69,34 @@ func Marker() string { return Bold(Cyan("::")) }
 // Arrow is the mark a project line inside a batch starts with.
 func Arrow() string { return Bold(Green("==>")) }
 
+// Change is a version moving from one value to another, painted the way
+// yay shows an upgrade: the part the two share as it is, what goes red,
+// what comes green, so the eye lands on the digits that differ.
+func Change(from, want string) string {
+	if from == want {
+		return from + " -> " + want
+	}
+
+	same := 0
+	for same < len(from) && same < len(want) && from[same] == want[same] {
+		same++
+	}
+
+	// Back up to a boundary, so 1.25.9 -> 1.26.0 paints 25.9 and 26.0,
+	// not 5.9 and 6.0.
+	for same > 0 && isVersionChar(from[same-1]) {
+		same--
+	}
+
+	return from[:same] + Red(from[same:]) + " -> " + want[:same] + Green(want[same:])
+}
+
+// isVersionChar says whether a byte is inside a version component rather
+// than between two.
+func isVersionChar(c byte) bool {
+	return c != '.' && c != '-' && c != '+' && c != '_' && c != '/'
+}
+
 func Bold(text string) string   { return paint(codeBold, text) }
 func Dim(text string) string    { return paint(codeDim, text) }
 func Red(text string) string    { return paint(codeRed, text) }

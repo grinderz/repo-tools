@@ -675,7 +675,7 @@ func TestChangelogBranchRelease(t *testing.T) {
 		t.Errorf("without the sentinel the dev branch stands: %q %v", got, err)
 	}
 
-	p.ChangelogBranch = changelogBranchRelease
+	p.ChangelogBranch = config.ChangelogBranchRelease
 
 	got, err := changelogBranch(r, p, "")
 	if err != nil || got != "release-1.0" {

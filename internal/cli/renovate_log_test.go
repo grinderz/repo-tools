@@ -73,8 +73,8 @@ func TestRenderRenovateLines(t *testing.T) {
 			"artifact errors name the lock file and the cause", "gitlab",
 			`{"level":40,"msg":"artifactErrors","repository":"group/api","branch":"renovate/dependencies",` +
 				`"artifactErrors":[{"lockFile":"uv.lock","stderr":"Using CPython 3.13\nerror: Failed to build ` +
-				`pycore\n  cause: not a project\n"}]}`,
-			"ERROR: lock file not updated\n      - uv.lock: error: Failed to build pycore",
+				`pylib\n  cause: not a project\n"}]}`,
+			"ERROR: lock file not updated\n      - uv.lock: error: Failed to build pylib",
 		},
 		{
 			"an odd field costs the field, not the line", "gitlab",

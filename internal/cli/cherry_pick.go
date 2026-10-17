@@ -104,6 +104,10 @@ func runCherryPick(rctx *run.Ctx, name string, args []string, releaseBranch stri
 	p := projects[0]
 	r := repoOf(p)
 
+	if !p.ReleaseEnabled() {
+		return fmt.Errorf("%s: %w", p.Name, reasonError(releasesOff))
+	}
+
 	if reason := missingRepo(r); reason != "" {
 		return fmt.Errorf("%s: %w", p.Name, reasonError(reason))
 	}
@@ -449,6 +453,12 @@ func listCandidates(rctx *run.Ctx, args []string, releaseBranch string, filter p
 func listProjectCandidates(rctx *run.Ctx, p *config.Project, releaseBranch string, filter pickFilter) {
 	header := run.Arrow() + " " + run.Bold(p.Name)
 	r := repoOf(p)
+
+	if !p.ReleaseEnabled() {
+		fmt.Println(header + "  " + releasesOff)
+
+		return
+	}
 
 	if reason := missingRepo(r); reason != "" {
 		fmt.Println(header + "  " + reason)

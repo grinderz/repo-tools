@@ -6,22 +6,33 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/grinderz/repo-tools/internal/config"
 	"github.com/grinderz/repo-tools/internal/gitx"
+	"github.com/grinderz/repo-tools/internal/run"
 )
 
-// pinHit is one version line that is not on the configured value.
+// pinHit is one version line a pin found: what it holds and what the pin
+// wants there, the same when the line is on the configured value.
 type pinHit struct {
 	File    string
 	Line    int
+	Label   string // the toolchain key the pin writes, for the eye
 	Current string
 	Want    string
 }
 
+// Changed says whether the line is not on the configured value.
+func (h pinHit) Changed() bool { return h.Current != h.Want }
+
 func (h pinHit) String() string {
-	return fmt.Sprintf("%s:%d: %s -> %s", h.File, h.Line, h.Current, h.Want)
+	if !h.Changed() {
+		return fmt.Sprintf("%s:%d %s: %s", h.File, h.Line, h.Label, h.Current)
+	}
+
+	return fmt.Sprintf("%s:%d %s: %s", h.File, h.Line, h.Label, run.Change(h.Current, h.Want))
 }
 
 // applyPins reads each pin's files among paths — the files git tracks in
@@ -48,11 +59,11 @@ func applyPins(
 	)
 
 	for _, pin := range pins {
-		pattern := pin.Regexp()
+		pattern, label, want := pin.Regexp(), pinLabel(pin), expand(pin.Value, vars)
 		found := false
 
 		for _, file := range pin.Files(paths) {
-			fileHits, matched, err := applyPin(dir, pin, pattern, file, expand(pin.Value, vars), write)
+			fileHits, matched, err := applyPin(dir, pin, pattern, label, file, want, write)
 			if err != nil && write {
 				return hits, applied, err
 			}
@@ -83,7 +94,7 @@ func applyPin(
 	dir string,
 	pin config.Pin,
 	pattern *regexp.Regexp,
-	file, want string,
+	label, file, want string,
 	write bool,
 ) ([]pinHit, bool, error) {
 	data, err := os.ReadFile(filepath.Join(dir, file))
@@ -97,14 +108,16 @@ func applyPin(
 
 	content := string(data)
 
-	hits, updated, matched := rewriteGroups(file, content, want, pattern.FindAllStringSubmatchIndex(content, -1))
-	if !matched {
+	sites, updated := rewriteGroups(file, label, content, want, pattern.FindAllStringSubmatchIndex(content, -1))
+	if len(sites) == 0 {
 		if pin.Optional {
 			return nil, false, nil
 		}
 
 		return nil, false, fmt.Errorf("pin %s: %q %w", file, pin.Match, errPinNotFound)
 	}
+
+	hits := slices.DeleteFunc(sites, func(h pinHit) bool { return !h.Changed() })
 
 	if write && len(hits) > 0 {
 		if err := rewriteFile(gitx.Repo{Dir: dir}, file, updated); err != nil {
@@ -115,15 +128,24 @@ func applyPin(
 	return hits, true, nil
 }
 
+// pinLabel names what a pin writes: the toolchain keys of its value, as
+// written ({go_minor} is go_minor), the value itself when it has none.
+func pinLabel(pin config.Pin) string {
+	if names := config.PlaceholdersIn(pin.Value); len(names) > 0 {
+		return strings.Join(names, "+")
+	}
+
+	return pin.Value
+}
+
 // rewriteGroups puts want into the capture group of every match in
-// content: the hits where it differs, the rewritten content, and whether
-// any match had the group at all.
-func rewriteGroups(file, content, want string, matches [][]int) ([]pinHit, string, bool) {
+// content: every line the group was found on, with what it holds, and
+// the rewritten content. No sites means no match had the group at all.
+func rewriteGroups(file, label, content, want string, matches [][]int) ([]pinHit, string) {
 	var (
-		hits    []pinHit
-		out     strings.Builder
-		last    int
-		matched bool
+		sites []pinHit
+		out   strings.Builder
+		last  int
 	)
 
 	for _, m := range matches {
@@ -136,13 +158,10 @@ func rewriteGroups(file, content, want string, matches [][]int) ([]pinHit, strin
 			end-- // $ stands before the \n of a CRLF line, the \r is the line's
 		}
 
-		matched = true
-
-		if current := content[start:end]; current != want {
-			hits = append(hits, pinHit{
-				File: file, Line: strings.Count(content[:start], "\n") + 1, Current: current, Want: want,
-			})
-		}
+		sites = append(sites, pinHit{
+			File: file, Line: strings.Count(content[:start], "\n") + 1, Label: label,
+			Current: content[start:end], Want: want,
+		})
 
 		out.WriteString(content[last:start])
 		out.WriteString(want)
@@ -152,16 +171,17 @@ func rewriteGroups(file, content, want string, matches [][]int) ([]pinHit, strin
 
 	out.WriteString(content[last:])
 
-	return hits, out.String(), matched
+	return sites, out.String()
 }
 
 // pinsAt are the pins that have a file at ref — the branch the bump works
-// on, so the plan says what will happen there rather than in the checkout.
-// A ref that cannot be listed is an error, not a project with nothing to pin.
-func pinsAt(r gitx.Repo, ref string, pins []config.Pin) ([]config.Pin, error) {
+// on, so the plan says what will happen there rather than in the checkout
+// — and the files there. A ref that cannot be listed is an error, not a
+// project with nothing to pin.
+func pinsAt(r gitx.Repo, ref string, pins []config.Pin) ([]config.Pin, []string, error) {
 	paths, err := r.FilesAt(ref)
 	if err != nil {
-		return nil, fmt.Errorf("files on %s: %w", ref, err)
+		return nil, nil, fmt.Errorf("files on %s: %w", ref, err)
 	}
 
 	var present []config.Pin
@@ -172,16 +192,49 @@ func pinsAt(r gitx.Repo, ref string, pins []config.Pin) ([]config.Pin, error) {
 		}
 	}
 
-	return present, nil
+	return present, paths, nil
 }
 
-// pinPlanLines is one line per pin for the plan: the file, the pattern and
-// the version that goes into it.
-func pinPlanLines(pins []config.Pin, vars map[string]string) []string {
-	lines := make([]string, 0, len(pins))
+// pinPlanLines reads the pins' files on ref and says what the bump would
+// do to them: one line per version line, current -> wanted where it
+// moves, the value alone and dim where it stays, and one for a required
+// line that is not there (the bump would stop on it).
+func pinPlanLines(r gitx.Repo, ref string, paths []string, pins []config.Pin, vars map[string]string) []string {
+	var (
+		lines []string
+		texts = map[string]string{} // a file once, however many pins it carries
+	)
 
 	for _, pin := range pins {
-		lines = append(lines, fmt.Sprintf("pin %s: %s -> %s", pin.File, pin.Match, expand(pin.Value, vars)))
+		pattern, label, want := pin.Regexp(), pinLabel(pin), expand(pin.Value, vars)
+
+		for _, file := range pin.Files(paths) {
+			text, read := texts[file]
+			if !read {
+				// A ref's file is absent only when the listing and the read
+				// disagree, which one ref cannot; an empty text then says
+				// "matches nothing", the honest answer.
+				text, _, _ = r.FileAt(ref, file)
+				texts[file] = text
+			}
+
+			sites, _ := rewriteGroups(file, label, text, want, pattern.FindAllStringSubmatchIndex(text, -1))
+			if len(sites) == 0 && !pin.Optional {
+				lines = append(
+					lines,
+					fmt.Sprintf("pin %s: %q matches nothing, the bump would stop here", file, pin.Match),
+				)
+			}
+
+			for _, site := range sites {
+				line := "pin " + site.String()
+				if !site.Changed() {
+					line = run.Dim(line)
+				}
+
+				lines = append(lines, line)
+			}
+		}
 	}
 
 	return lines
