@@ -63,12 +63,13 @@ const (
 )
 
 type renovateOpts struct {
-	DryRun      string // one of renovateDryRunModes, or empty for a real run
-	LogFile     string // a copy of the raw JSON log lines
-	LocalConfig bool   // each project's config from its working copy, not its branch
-	Update      string // how far a dependency may move: patch, minor or major; empty takes the config's
-	Group       string // all: one merge request per project; separate: Renovate's own cut; empty takes the config's
-	Internal    string // dev, always or never: when the config's own projects move as dependencies; empty: the config's
+	DryRun      string   // one of renovateDryRunModes, or empty for a real run
+	LogFile     string   // a copy of the raw JSON log lines
+	LocalConfig bool     // each project's config from its working copy, not its branch
+	Update      string   // how far a dependency may move: patch, minor or major; empty takes the config's
+	Group       string   // all: one merge request per project; separate: Renovate's own cut; empty takes the config's
+	Internal    string   // dev, always or never: when the config's own projects move as dependencies; empty: the config's
+	Packages    []string // the dependencies this run is about, every other one held back; empty: all of them
 }
 
 // fill takes the config's choice for every option the flags left empty.
@@ -93,6 +94,13 @@ func (o *renovateOpts) validate() error {
 
 	if o.Internal != "" && !slices.Contains(config.RenovateInternals, o.Internal) {
 		return fmt.Errorf("--internal %q %w", o.Internal, errBadInternal)
+	}
+
+	for i, pkg := range o.Packages {
+		o.Packages[i] = strings.TrimSpace(pkg)
+		if o.Packages[i] == "" {
+			return fmt.Errorf("--pkg %q (flag %d) %w", pkg, i+1, errEmptyPackage)
+		}
 	}
 
 	return nil
@@ -173,7 +181,18 @@ func newRenovateCmd(rctx *run.Ctx, name string) *cobra.Command {
 			"tried with --renovate-dry-run full before it is pushed anywhere.\n\n" +
 			"--update says how far a dependency may move: patch (the default, and\n" +
 			"renovate.update in the config) holds major and minor updates back, minor\n" +
-			"holds major back, major takes everything in one update per dependency.",
+			"holds major back, major takes everything in one update per dependency.\n\n" +
+			"--pkg names the dependencies the run is about and holds every other one\n" +
+			"back, the internal modules too: an exact package name, a glob (**/httpx2\n" +
+			"for a Go module by its last element) or a /regex/, as Renovate's\n" +
+			"matchPackageNames reads them; repeat the flag for more than one. Under\n" +
+			"--group all the run gets a branch of its own (pkg-<names>, patch-pkg-\n" +
+			"<names> at the patch level); either way it leaves the other merge\n" +
+			"requests open, and the next --group all run without --pkg closes its\n" +
+			"merge requests if still open, so merge them first. A named internal\n" +
+			"module required at a pseudo-version moves only under --update major:\n" +
+			"moving it to the head of its default branch, on a release branch too,\n" +
+			"is a digest update, which the levels below hold back.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := opts.validate(); err != nil {
 				return err
@@ -221,6 +240,9 @@ func newRenovateCmd(rctx *run.Ctx, name string) *cobra.Command {
 	c.Flags().StringVar(&opts.Internal, "internal", "",
 		"when the config's own projects move as dependencies of each other: dev (on the dev branch alone), "+
 			"always or never (default: renovate.internal, dev)")
+	c.Flags().StringArrayVar(&opts.Packages, "pkg", nil,
+		"the dependencies to update, every other one held back: a package name, a glob or a /regex/ "+
+			"(repeat for more than one)")
 	c.Flags().BoolVar(&opts.LocalConfig, "local-config", false,
 		"use each project's renovate config from its working copy, not from its target branch")
 
@@ -586,7 +608,17 @@ func renovateGroupStep(rctx *run.Ctx, group *renovateGroup, opts renovateOpts) r
 		fmt.Sprintf("image %s via %s, %s", cfg.Image, cfg.Docker, mode),
 		"updates: " + renovateUpdateWording(opts.Update),
 		"merge requests: " + renovateGroupWording(opts.Group),
-		"internal modules: " + renovateInternalWording(opts.Internal),
+		"internal modules: " + renovateInternalWording(opts.Internal, opts.Packages),
+	}
+
+	if len(opts.Packages) > 0 {
+		where := "their usual branches"
+		if opts.Group == groupAll {
+			where = renovatePackageTopic(opts)
+		}
+
+		plan = append(plan,
+			"packages: "+strings.Join(opts.Packages, ", ")+" only, on "+where+" (the other merge requests stay open)")
 	}
 
 	if group.Endpoint != "" {
@@ -621,7 +653,7 @@ func renovateGroupStep(rctx *run.Ctx, group *renovateGroup, opts renovateOpts) r
 			source = append(source, "preset "+preset)
 		}
 
-		if renovateInternalOn(opts.Internal, repo) {
+		if len(opts.Packages) == 0 && renovateInternalOn(opts.Internal, repo) {
 			source = append(source, "internal modules too")
 		}
 
@@ -671,8 +703,12 @@ const (
 )
 
 // renovateInternalWording says in the plan when the config's own projects
-// move as dependencies.
-func renovateInternalWording(internal string) string {
+// move as dependencies; under --pkg the names decide, not the mode.
+func renovateInternalWording(internal string, packages []string) string {
+	if len(packages) > 0 {
+		return "held back unless --pkg names them"
+	}
+
 	switch internal {
 	case internalAlways:
 		return "updated on every branch"
@@ -787,13 +823,104 @@ func renovateGroupWording(group string) string {
 
 // renovateGroupRule puts every update of a repository in one group. It
 // goes after the repository's own rules — a later rule wins in Renovate —
-// so a group of the file's own does not split its packages off.
-func renovateGroupRule() map[string]any {
-	return map[string]any{
+// so a group of the file's own does not split its packages off. Under
+// --pkg the group is the names, on a branch of its own, so the run does
+// not rewrite the regular merge request, which sits on the group's
+// branch, and the next regular run does not rewrite this one.
+func renovateGroupRule(packages []string) map[string]any {
+	rule := map[string]any{
 		ruleDescription: "rt deps renovate --group all",
 		ruleMatchNames:  []string{"*"},
 		"groupName":     "dependencies",
 	}
+
+	if len(packages) > 0 {
+		rule["groupName"] = strings.Join(packages, ", ")
+		rule["groupSlug"] = renovatePackageSlug(packages)
+	}
+
+	return rule
+}
+
+// renovatePackageTopic is the branch topic of a --pkg run as Renovate
+// names it: the slug, with patch- in front at the patch level, where
+// separateMinorPatch makes the patch branch its own.
+func renovatePackageTopic(opts renovateOpts) string {
+	slug := renovatePackageSlug(opts.Packages)
+	if opts.Update == updateMinor || opts.Update == updateMajor {
+		return slug
+	}
+
+	return "patch-" + slug
+}
+
+// renovatePackageSlug is the group slug of a --pkg run: pkg- and the
+// names, lower case, anything but an ASCII letter or digit a dash — plainer
+// than Renovate's own slug of a group name, which keeps * and ., and one
+// Renovate's slug leaves as it is.
+func renovatePackageSlug(packages []string) string {
+	var slug strings.Builder
+
+	slug.WriteString("pkg")
+
+	for _, pkg := range packages {
+		dash := true // one after pkg, then one per run of other characters
+
+		for _, r := range strings.ToLower(pkg) {
+			if ('a' <= r && r <= 'z') || ('0' <= r && r <= '9') {
+				if dash {
+					slug.WriteByte('-')
+				}
+
+				slug.WriteRune(r)
+
+				dash = false
+
+				continue
+			}
+
+			dash = true
+		}
+	}
+
+	return slug.String()
+}
+
+// renovatePackageRules keep a run to the dependencies --pkg names: every
+// package off, the named ones on again, and the types the level holds
+// back off again for them. They go last in a repository's rules and take
+// the place of the internal rules: --internal says nothing about a run
+// that names its packages, and a named internal module is enabled like
+// any other, a shared config disabling it notwithstanding. The third rule
+// is needed because Renovate reads the rules once more when the update
+// types are known, and the enabling rule, read then too, would undo the
+// level rule, which comes earlier. It holds the digest back too, so a
+// named internal module required at a pseudo-version, whose one update
+// is a digest, moves under --update major alone.
+func renovatePackageRules(packages []string, update string) []any {
+	rules := []any{
+		map[string]any{
+			ruleDescription: "rt deps renovate --pkg: every other dependency",
+			ruleMatchNames:  []string{"*"},
+			ruleEnabled:     false,
+		},
+		map[string]any{
+			ruleDescription: "rt deps renovate --pkg " + strings.Join(packages, ", "),
+			ruleMatchNames:  packages,
+			ruleEnabled:     true,
+		},
+	}
+
+	if held := renovateLevelHeld(update); len(held) > 0 {
+		rules = append(rules, map[string]any{
+			ruleDescription: "rt deps renovate --pkg: the level's updates alone",
+			ruleMatchNames:  packages,
+			ruleMatchTypes:  held,
+			ruleEnabled:     false,
+		})
+	}
+
+	return rules
 }
 
 // renovateUpdateWording says in the plan what an update level means.
@@ -853,7 +980,8 @@ func renovateLevelHeld(update string) []string {
 // platform, the repositories with their base branches and their own config
 // files, no onboarding, the dry-run mode, the update level, and the config
 // block's own keys over all of it — its packageRules after the level's, so
-// they can override it. Each repository's file goes inside its entry, with
+// they can override it — but for the pruning a --pkg run turns off, which
+// is the flag's own meaning. Each repository's file goes inside its entry, with
 // requireConfig: ignored so Renovate does not read it a second time: there
 // rt's group rule can come after the file's own rules.
 func renovateGlobalConfig(
@@ -877,6 +1005,12 @@ func renovateGlobalConfig(
 	}
 
 	maps.Copy(global, cfg.Config)
+
+	// A --pkg run produces its own branch alone: pruning would close the
+	// merge requests of the regular runs as stale.
+	if len(opts.Packages) > 0 {
+		global["pruneStaleBranches"] = false
+	}
 
 	// The tools Renovate runs see only the variables it hands them, so the
 	// mounted netrc is named through its config, not the environment.
@@ -910,19 +1044,7 @@ func renovateGlobalConfig(
 		entry["requireConfig"] = "ignored"
 
 		own, _ := entry["packageRules"].([]any)
-		rules := slices.Clone(own)
-
-		if opts.Group == groupAll {
-			rules = append(rules, renovateGroupRule())
-		}
-
-		if len(internal) > 0 {
-			rules = append(
-				rules,
-				renovateInternalRules(internal, renovateInternalOn(opts.Internal, repo), opts.Update)...)
-		}
-
-		if len(rules) > 0 {
+		if rules := renovateRepoRules(own, repo, opts, internal); len(rules) > 0 {
 			entry["packageRules"] = rules
 		}
 
@@ -938,6 +1060,28 @@ func renovateGlobalConfig(
 	}
 
 	return out, nil
+}
+
+// renovateRepoRules are a repository's package rules: the file's own
+// first, then rt's — the group rule, and the --pkg rules or else the
+// internal rules — each later one winning over the earlier.
+func renovateRepoRules(own []any, repo renovateRepo, opts renovateOpts, internal []string) []any {
+	rules := slices.Clone(own)
+
+	if opts.Group == groupAll {
+		rules = append(rules, renovateGroupRule(opts.Packages))
+	}
+
+	switch {
+	case len(opts.Packages) > 0:
+		rules = append(rules, renovatePackageRules(opts.Packages, opts.Update)...)
+	case len(internal) > 0:
+		rules = append(
+			rules,
+			renovateInternalRules(internal, renovateInternalOn(opts.Internal, repo), opts.Update)...)
+	}
+
+	return rules
 }
 
 // renovateFixedFlags is the room for the flag pairs every run has: the

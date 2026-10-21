@@ -1189,6 +1189,7 @@ rt deps renovate api --local-config --renovate-dry-run full  # try an uncommitte
 rt deps renovate --update minor               # minor and patch; the default is patch only
 rt deps renovate --group separate             # a merge request per dependency; the default is one per project
 rt deps renovate --internal never             # leave the internal modules alone; the default moves them on the dev branch
+rt deps renovate --update major --pkg '**/httpx2'  # one dependency, as far as it goes; everything else held back
 ```
 
 Third-party dependencies — `go.mod` requires, `pyproject.toml` packages, image
@@ -1315,6 +1316,52 @@ so a group of the file's own does not split its packages off, and a file
 needs no group rule of its own. `separate` adds nothing: one merge request
 per dependency, grouped only where the file says so. The plan names it:
 `merge requests: one per project`.
+
+`--pkg name` keeps a run to the dependencies it names and holds every
+other one back, the internal modules too, for the one package that has to
+move now, or further than the level `renovate.update` sets —
+`--update major --pkg '**/httpx2'`; repeat the flag for more than one. A
+name is read as Renovate's `matchPackageNames` reads it: an exact package
+name (`uv`, `github.com/x/httpx2`), a glob (`**/httpx2` for a Go module by
+its last element; a bare `httpx2` does not match a module path) or a
+`/regex/`. rt writes it as rules at the end of the repository's rules, in
+place of the internal rules: every package off, the named ones on again
+and, below `major`, the types the level holds back off again for them. The
+third is needed because Renovate reads the rules a second time once the
+update types are known, and the enabling rule alone would undo the level
+rule there. For the named packages the run's level and the names win over
+the file's own rules both ways: a type the file closed for one of them
+opens, a level the file opened above the run's closes. A named internal
+module is enabled like any other, whatever a shared config says and on
+whichever branch the run is on — `--internal` and the `deps freeze` pin of
+a release branch no longer hold it, and the digest Renovate offers is the
+head of the module's default branch, its dev branch, so on a release
+branch the freeze is undone — but one required at a pseudo-version has a
+digest update alone, so it moves under `--update major` alone; one
+required at a tag moves as the level says.
+
+The run keeps apart from the regular ones. Under `--group all` its group is
+the names, on a branch of its own, `renovate/pkg-httpx2`
+(`renovate/patch-pkg-httpx2` at the patch level, the prefix as above; the
+slug is the names in lower case, a dash for anything else), so it does not
+rewrite the regular merge request on `renovate/[patch-]dependencies`, and the run
+turns Renovate's pruning off (`pruneStaleBranches: false`), since a run
+that produces one branch would otherwise close every other Renovate merge
+request of the repository as stale (a replacement, a package renamed
+upstream, takes a branch of its own even in a group). The next run without
+`--pkg` prunes as usual, and closes the `--pkg` merge request if it is
+still open, so merge it first. Under `--group separate` the named
+dependencies take their usual branches (`on their usual branches` in the
+plan), which a regular `--group separate` run at the same level carries
+on; any other regular run closes them like the pkg branch. A run that
+opens nothing either found no update at the level, no package by that
+name, or hit Renovate's merge request limits (`prHourlyLimit`, two an
+hour, and `prConcurrentLimit`; the branch is pushed, the merge request
+waits for the next run — `renovate.config: {prHourlyLimit: 0}` lifts the
+hourly one): `--renovate-dry-run lookup --log-file` shows the names
+Renovate extracted. The plan names them: `packages:
+**/httpx2 only, on pkg-httpx2 (the other merge requests stay open)`,
+and `internal modules: held back unless --pkg names them`.
 
 `--internal dev|always|never` says when the config's own projects move as
 dependencies of each other — the internal Go modules a go.mod requires at a

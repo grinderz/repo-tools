@@ -76,6 +76,7 @@ var (
 	errBadUpdateLevel        = errors.New("is not an update level (patch, minor, major)")
 	errBadGroup              = errors.New("is not a grouping (all, separate)")
 	errBadInternal           = errors.New("is not an internal mode (dev, always, never)")
+	errEmptyPackage          = errors.New("is empty")
 	errBadDryRunMode         = errors.New("is not a renovate dry-run mode: extract, lookup, full")
 	errRenovateTokenHosts    = errors.New("is set and would go to every host of the run")
 	errRenovateEndpointHosts = errors.New("renovate.endpoint names one host but the run spans")
