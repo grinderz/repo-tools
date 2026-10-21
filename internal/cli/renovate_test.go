@@ -2,6 +2,8 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -278,8 +280,9 @@ func TestRenovateInternalRule(t *testing.T) {
 		}
 	}
 
-	if renovateInternalWording("dev") != "updated on the dev branch, held back elsewhere" ||
-		renovateInternalWording("never") != "held back" {
+	if renovateInternalWording("dev", nil) != "updated on the dev branch, held back elsewhere" ||
+		renovateInternalWording("never", nil) != "held back" ||
+		renovateInternalWording("always", []string{"uv"}) != "held back unless --pkg names them" {
 		t.Error("wording")
 	}
 
@@ -347,6 +350,188 @@ func TestRenovateGroupRule(t *testing.T) {
 	if renovateGroupWording("all") != "one per project" ||
 		renovateGroupWording("separate") != "one per dependency, the project's own groups apart" {
 		t.Error("wording")
+	}
+}
+
+// --pkg: every package off, the named ones on, the level's held types off
+// again for them, in place of the internal rules.
+func TestRenovatePackageRules(t *testing.T) {
+	t.Parallel()
+
+	ownRule := map[string]any{"matchPackageNames": []any{"go.opentelemetry.io/**"}, "groupName": "otel"}
+	group := &renovateGroup{
+		Platform: "gitlab", Host: "git.example.com",
+		Repos: []renovateRepo{
+			{Slug: "group/api", Branch: "develop", Config: map[string]any{"packageRules": []any{ownRule}}},
+		},
+	}
+	internal := []string{"git.example.com/group/lib", "git.example.com/group/lib/**"}
+
+	out, err := renovateGlobalConfig(&config.Renovate{}, group,
+		renovateOpts{Update: "minor", Group: "all", Internal: "always", Packages: []string{"**/httpx2", "uv"}},
+		internal)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var parsed struct {
+		Repositories []struct {
+			PackageRules []map[string]any `json:"packageRules"`
+		} `json:"repositories"`
+	}
+
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatal(err)
+	}
+
+	rules := parsed.Repositories[0].PackageRules
+
+	// The file's own, the group, then the three of --pkg: the internal
+	// rules give way, since --pkg decides over the internal modules too.
+	const want = 5
+	if len(rules) != want {
+		t.Fatalf("rules = %d, want %d:\n%s", len(rules), want, out)
+	}
+
+	// The group is the names, on a branch of its own, so the regular merge
+	// request is neither rewritten nor, with pruning off, closed as stale.
+	if rules[0]["groupName"] != "otel" || rules[1]["groupName"] != "**/httpx2, uv" ||
+		rules[1]["groupSlug"] != "pkg-httpx2-uv" {
+		t.Errorf("the file's rule and the group rule come first: %v", rules[:2])
+	}
+
+	held, named, level := rules[2], rules[3], rules[4]
+	if fmt.Sprint(held["matchPackageNames"]) != "[*]" || held["enabled"] != false || held["matchUpdateTypes"] != nil {
+		t.Errorf("held rule = %v", held)
+	}
+
+	if fmt.Sprint(named["matchPackageNames"]) != "[**/httpx2 uv]" || named["enabled"] != true ||
+		named["matchUpdateTypes"] != nil {
+		t.Errorf("named rule = %v", named)
+	}
+
+	// Renovate reads the enabling rule again once the update types are
+	// known, after the level rule: the third closes the held types again.
+	if fmt.Sprint(level["matchPackageNames"]) != "[**/httpx2 uv]" || level["enabled"] != false ||
+		fmt.Sprint(level["matchUpdateTypes"]) != "[major digest replacement]" {
+		t.Errorf("level rule = %v", level)
+	}
+
+	if strings.Contains(string(out), "--internal") {
+		t.Errorf("the internal rules give way to --pkg:\n%s", out)
+	}
+
+	out, err = renovateGlobalConfig(&config.Renovate{}, group, renovateOpts{Update: "minor", Group: "all"}, internal)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(string(out), "--pkg") || !strings.Contains(string(out), "--internal") {
+		t.Errorf("no --pkg: no package rules, the internal rules back:\n%s", out)
+	}
+}
+
+// The levels below major hold types back for the named packages too; a
+// name is trimmed and keeps its commas, which a regex or a glob may hold.
+func TestRenovatePackagesByLevelAndName(t *testing.T) {
+	t.Parallel()
+
+	patch := renovatePackageRules([]string{"uv"}, "")
+	if len(patch) != 3 {
+		t.Fatalf("patch, the default, adds the third rule: %v", patch)
+	}
+
+	if third, _ := patch[2].(map[string]any); fmt.Sprint(
+		third["matchUpdateTypes"],
+	) != "[major minor digest replacement]" {
+		t.Errorf("patch holds four types back: %v", third)
+	}
+
+	if rules := renovatePackageRules([]string{"uv"}, "major"); len(rules) != 2 {
+		t.Errorf("major holds nothing back, so no third rule: %v", rules)
+	}
+
+	// The branch topic carries Renovate's patch- at the patch level alone.
+	topics := map[string]string{"": "patch-pkg-uv", "patch": "patch-pkg-uv", "minor": "pkg-uv", "major": "pkg-uv"}
+	for update, want := range topics {
+		if got := renovatePackageTopic(renovateOpts{Update: update, Packages: []string{"uv"}}); got != want {
+			t.Errorf("topic at %q = %q, want %q", update, got, want)
+		}
+	}
+
+	opts := renovateOpts{Packages: []string{"httpx2", " "}}
+	if err := opts.validate(); !errors.Is(err, errEmptyPackage) || !strings.Contains(err.Error(), `" " (flag 2)`) {
+		t.Errorf("validate = %v, want errEmptyPackage naming the flag", err)
+	}
+
+	opts = renovateOpts{Packages: []string{" uv ", "/^x/(a|b){1,2}$/"}}
+	if err := opts.validate(); err != nil || fmt.Sprint(opts.Packages) != "[uv /^x/(a|b){1,2}$/]" {
+		t.Errorf("validate trims and keeps a comma: %v %v", opts.Packages, err)
+	}
+
+	for name, want := range map[string]string{
+		"uv":                 "pkg-uv",
+		"**/httpx2":          "pkg-httpx2",
+		"github.com/x/Go.v2": "pkg-github-com-x-go-v2",
+		"/^x/(a|b){1,2}$/":   "pkg-x-a-b-1-2",
+	} {
+		if got := renovatePackageSlug([]string{name}); got != want {
+			t.Errorf("slug(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
+// A --pkg run produces one branch, so it must not prune the others; a
+// regular run prunes as Renovate has it and carries no slug.
+func TestRenovatePackagesLeaveTheOtherBranches(t *testing.T) {
+	t.Parallel()
+
+	group := &renovateGroup{
+		Platform: "gitlab", Host: "git.example.com",
+		Repos: []renovateRepo{{Slug: "group/api", Branch: "develop"}},
+	}
+
+	for _, tc := range []struct {
+		packages []string
+		prune    bool
+	}{
+		{packages: []string{"uv"}, prune: false},
+		{packages: nil, prune: true},
+	} {
+		out, err := renovateGlobalConfig(&config.Renovate{}, group,
+			renovateOpts{Update: "patch", Group: "all", Packages: tc.packages}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		pruneOff := strings.Contains(string(out), `"pruneStaleBranches": false`)
+		if pruneOff == tc.prune || strings.Contains(string(out), "groupSlug") != !tc.prune {
+			t.Errorf("--pkg %v:\n%s", tc.packages, out)
+		}
+	}
+
+	// Under --group separate there is no group rule: the named packages
+	// take their usual branches, the three --pkg rules still there.
+	out, err := renovateGlobalConfig(&config.Renovate{}, group,
+		renovateOpts{Update: "patch", Group: "separate", Packages: []string{"uv"}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(string(out), "groupSlug") || strings.Count(string(out), "rt deps renovate --pkg") != 3 {
+		t.Errorf("--pkg with --group separate:\n%s", out)
+	}
+
+	rctx := testCtx()
+	rctx.Cfg.Renovate = config.Renovate{Image: "renovate/renovate:44", Docker: "docker"}
+	group.Repos[0].Project = &config.Project{Name: "api"}
+
+	plan := strings.Join(
+		renovateGroupStep(rctx, group, renovateOpts{Group: "separate", Packages: []string{"uv"}}).Plan,
+		"\n",
+	)
+	if !strings.Contains(plan, "packages: uv only, on their usual branches (the other merge requests stay open)") {
+		t.Errorf("plan with --group separate names no pkg branch:\n%s", plan)
 	}
 }
 
@@ -587,6 +772,22 @@ func TestRenovateLocalConfig(t *testing.T) {
 	if plan := strings.Join(renovateGroupStep(rctx, group, renovateOpts{}).Plan, "\n"); !strings.Contains(plan,
 		"group/parent on develop (renovate.json from the working copy, internal modules too)") {
 		t.Errorf("plan:\n%s", plan)
+	}
+
+	// --pkg decides over the internal modules too: the plan says so once,
+	// not per repository.
+	named := strings.Join(
+		renovateGroupStep(rctx, group, renovateOpts{Group: "all", Packages: []string{"**/httpx2", "uv"}}).Plan,
+		"\n",
+	)
+	for _, want := range []string{
+		"internal modules: held back unless --pkg names them",
+		"packages: **/httpx2, uv only, on patch-pkg-httpx2-uv (the other merge requests stay open)",
+		"group/parent on develop (renovate.json from the working copy)\n",
+	} {
+		if !strings.Contains(named+"\n", want) {
+			t.Errorf("plan with --pkg lacks %q:\n%s", want, named)
+		}
 	}
 
 	// The file's own base branches win over rt's, so the plan shows them.

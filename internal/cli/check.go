@@ -164,9 +164,10 @@ func checkRemote(r gitx.Repo, p *config.Project) []string {
 	}
 
 	// Renovate takes an internal module to the head of its repository's
-	// default branch on the platform, which only deps renovate --internal
-	// dev assumes is the dev branch. The clone records origin's default
-	// branch as origin/HEAD; a clone without one is not told.
+	// default branch on the platform, which deps renovate --internal dev,
+	// and --pkg naming a module, assume is the dev branch. The clone
+	// records origin's default branch as origin/HEAD; a clone without one
+	// is not told.
 	if head, err := r.Git("symbolic-ref", "-q", "refs/remotes/origin/HEAD"); err == nil {
 		if branch := strings.TrimPrefix(head, "refs/remotes/origin/"); branch != p.DevBranch {
 			issues = append(issues, fmt.Sprintf(
