@@ -27,10 +27,18 @@ echo "$*" >> "$GLAB_LOG"
 case "$1 $2" in
   "api projects/:id/merge_requests/"*)
     state=opened; [ -f "$GLAB_LOG.state" ] && state=$(cat "$GLAB_LOG.state")
+    if [ "${GLAB_AUTO_MERGE:-}" = 1 ]; then
+      source=$(cat "$GLAB_LOG.source")
+      target=$(cat "$GLAB_LOG.target")
+      git push origin "$source:$target" >/dev/null 2>&1 || exit 1
+      state=merged
+    fi
     echo "{\"state\":\"$state\"}" ;;
   "api projects/:id/merge_requests"*)
     if [ -f "$GLAB_LOG.mr" ]; then echo '[{"web_url":"https://gl/mr/1"}]'; else echo '[]'; fi ;;
   "mr create")
+    printf '%s\n' "$4" > "$GLAB_LOG.source"
+    printf '%s\n' "$6" > "$GLAB_LOG.target"
     touch "$GLAB_LOG.mr"; echo "Creating merge request for $4 into $6"; echo "https://gl/mr/1" ;;
   "api projects/:id/pipelines?"*)
     # no pipeline on the branch, one on the merge request
@@ -115,7 +123,7 @@ func TestCommitAndPushOpensAMergeRequest(t *testing.T) {
 	var err error
 
 	out := captureOutput(t, func() {
-		err = commitAndPush(rctx, r, p, cmdDepsSubmodules, "develop", "chore: bump", "nothing")
+		err = commitAndPush(rctx, r, p, cmdDepsSubmodules, "develop", "chore: bump", "nothing", false)
 	})
 	if err != nil {
 		t.Fatalf("commitAndPush: %v", err)
@@ -163,7 +171,7 @@ func TestCommitAndPushOpensAMergeRequest(t *testing.T) {
 	writeFile(t, f.parent, "app.txt", "bumped again\n")
 
 	captureOutput(t, func() {
-		err = commitAndPush(rctx, r, p, cmdDepsSubmodules, "develop", "chore: bump again", "nothing")
+		err = commitAndPush(rctx, r, p, cmdDepsSubmodules, "develop", "chore: bump again", "nothing", false)
 	})
 
 	if err != nil {
@@ -180,6 +188,101 @@ func TestCommitAndPushOpensAMergeRequest(t *testing.T) {
 	}
 }
 
+// --wait-merge holds the command even without later dependent projects, then
+// refreshes the target checkout for the next flow step's working-copy checks.
+func TestCommitAndPushWaitMergeRefreshesTarget(t *testing.T) {
+	log := fakeGlab(t)
+	t.Setenv("GLAB_AUTO_MERGE", "1")
+
+	f, rctx, p := mrFixture(t)
+	rctx.FetchFlag = nil
+	rctx.Cfg.MergeRequest.Wait = config.MRWaitNone
+	r := gitx.Repo{Dir: f.parent}
+
+	writeFile(t, f.sub, "lib.txt", "v3\n")
+	newPin := commit(t, f.sub, "sub: next develop change")
+	git(t, f.parent, "submodule", "update", "--remote", "--", "sub")
+	writeFile(t, f.parent, "app.txt", "merged bump\n")
+
+	var err error
+
+	out := captureOutput(t, func() {
+		err = commitAndPush(rctx, r, p, cmdDepsSubmodules, "develop", "chore: bump", "nothing", true)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(out, "waiting for https://gl/mr/1 to be merged (wait: --wait-merge)") {
+		t.Errorf("wait was not reported: %s", out)
+	}
+
+	if got := git(t, f.parent, "rev-parse", "HEAD"); got != git(t, f.parent, "rev-parse", "origin/develop") {
+		t.Errorf("target checkout %s did not catch up with origin/develop", got)
+	}
+
+	content, err := os.ReadFile(filepath.Join(f.parent, "app.txt"))
+	if err != nil || string(content) != "merged bump\n" {
+		t.Errorf("merged file in working copy = %q, %v", content, err)
+	}
+
+	if pin := git(t, filepath.Join(f.parent, "sub"), "rev-parse", "HEAD"); pin != newPin {
+		t.Errorf("submodule checkout = %s, want merged pin %s", pin, newPin)
+	}
+
+	if status := git(t, f.parent, "status", "--porcelain"); status != "" {
+		t.Errorf("target checkout is dirty: %s", status)
+	}
+
+	calls, _ := os.ReadFile(log)
+	if !strings.Contains(string(calls), "api projects/:id/merge_requests/1") {
+		t.Errorf("MR state was not queried: %s", calls)
+	}
+}
+
+// The freeze step uses the same wait as deps submodules: the next step must
+// see the merged release commit and the submodule pin it records.
+func TestFreezeDepsWaitMergeRefreshesRelease(t *testing.T) {
+	fakeGlab(t)
+	t.Setenv("GLAB_AUTO_MERGE", "1")
+
+	f, rctx, p := mrFixture(t)
+	on := true
+	p.DepsFreeze = &on
+	p.Submodules = []config.Submodule{{Path: "sub", FreezeTo: "release-1.0"}}
+	rctx.FetchFlag = nil
+	rctx.Cfg.MergeRequest.Wait = config.MRWaitNone
+
+	git(t, f.sub, "checkout", "--quiet", "release-1.0")
+	writeFile(t, f.sub, "lib.txt", "next release pin\n")
+	newPin := commit(t, f.sub, "sub: next release change")
+
+	var err error
+
+	out := captureOutput(t, func() {
+		err = freezeDeps(rctx, p, "release-1.0", true, false, true)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !strings.Contains(out, "waiting for https://gl/mr/1 to be merged (wait: --wait-merge)") {
+		t.Errorf("freeze did not wait for its MR: %s", out)
+	}
+
+	if head := git(t, f.parent, "rev-parse", "HEAD"); head != git(t, f.parent, "rev-parse", "origin/release-1.0") {
+		t.Errorf("release checkout %s did not catch up with origin", head)
+	}
+
+	if pin := git(t, filepath.Join(f.parent, "sub"), "rev-parse", "HEAD"); pin != newPin {
+		t.Errorf("submodule checkout = %s, want merged pin %s", pin, newPin)
+	}
+
+	if status := git(t, f.parent, "status", "--porcelain"); status != "" {
+		t.Errorf("release checkout is dirty: %s", status)
+	}
+}
+
 // The plan says where the commit goes and what the review will ask; a
 // project that cannot open a request is reported by repo check, not at the
 // push.
@@ -191,7 +294,8 @@ func TestMergeRequestPlanAndCheck(t *testing.T) {
 		Branch: "rt/{command}/{branch}/{date}", Title: "{message}",
 	}}}
 
-	lines := commitPlanLines(rctx, p, cmdChangelogUpdate, "release-1.0", "files changed", "chore: changelog\n\nbody")
+	lines := commitPlanLines(rctx, p, cmdChangelogUpdate, "release-1.0", "files changed",
+		"chore: changelog\n\nbody", false)
 
 	want := "commit to rt/changelog-update/release-1.0/" + time.Now().Format(time.DateOnly) +
 		", push, open MR into release-1.0 if files changed"
@@ -244,13 +348,13 @@ func TestMergeRequestPlanAndCheck(t *testing.T) {
 	rctx.Cfg.MergeRequest.Wait = config.MRWaitAlways
 	rctx.Cfg.MergeRequest.SettleSeconds = &settle
 
-	lines = commitPlanLines(rctx, p, cmdChangelogUpdate, "release-1.0", "files changed", "msg")
+	lines = commitPlanLines(rctx, p, cmdChangelogUpdate, "release-1.0", "files changed", "msg", false)
 	if !strings.Contains(lines[0], "then wait for the MR to be merged (wait: always) and 30s more") {
 		t.Errorf("plan line %q lacks the wait", lines[0])
 	}
 
 	rctx.Cfg.MergeRequest.Wait = config.MRWaitNone
-	if got := waitPlan(rctx, p); got != "" {
+	if got := waitPlan(rctx, p, false); got != "" {
 		t.Errorf("wait: none must plan no wait, got %q", got)
 	}
 
@@ -343,13 +447,17 @@ func TestMRDependentsLookAheadInTheRun(t *testing.T) {
 		t.Errorf("parent runs before lib and cannot wait for it, got %v", got)
 	}
 
-	if got := mrWaitFor(rctx, lib); got != nil {
+	if got := mrWaitFor(rctx, lib, false); got != nil {
 		t.Errorf("dependents: no wait without dependents, got %v", got)
+	}
+
+	if got := mrWaitFor(rctx, lib, true); len(got) != 1 || got[0] != "wait: --wait-merge" {
+		t.Errorf("--wait-merge must override the dependent policy, got %v", got)
 	}
 
 	cfg.MergeRequest.Wait = config.MRWaitAlways
 
-	if got := mrWaitFor(rctx, lib); len(got) != 1 {
+	if got := mrWaitFor(rctx, lib, false); len(got) != 1 {
 		t.Errorf("always: wait whatever the run, got %v", got)
 	}
 }
@@ -441,7 +549,7 @@ func TestCommitAndPushFillsTheBodyFromTheTemplate(t *testing.T) {
 	var err error
 
 	out := captureOutput(t, func() {
-		err = commitAndPush(rctx, r, p, cmdDepsSubmodules, "develop", "chore: bump", "nothing")
+		err = commitAndPush(rctx, r, p, cmdDepsSubmodules, "develop", "chore: bump", "nothing", false)
 	})
 	if err != nil {
 		t.Fatalf("commitAndPush: %v", err)

@@ -148,6 +148,7 @@ func TestPlanLinesMentionTheReview(t *testing.T) {
 		"release-1.0",
 		"files changed",
 		"ci/AB-0000: update changelog",
+		false,
 	)
 	if !strings.Contains(lines[0], "diff shown first") {
 		t.Errorf("got %q", lines[0])
@@ -164,7 +165,7 @@ func TestPlanLinesMentionTheReview(t *testing.T) {
 	off := false
 	quiet := &run.Ctx{Cfg: &config.Config{Diff: &off}}
 
-	got := commitPlanLines(quiet, p, cmdChangelogUpdate, "release-1.0", "files changed", "msg")[0]
+	got := commitPlanLines(quiet, p, cmdChangelogUpdate, "release-1.0", "files changed", "msg", false)[0]
 	if strings.Contains(got, "diff") {
 		t.Errorf("with the review off the line should not mention it: %q", got)
 	}

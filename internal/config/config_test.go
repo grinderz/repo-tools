@@ -360,6 +360,24 @@ projects:
     submodules:
       - path: sub
 `, "freeze_to"},
+		{"empty ignored submodule", `
+projects_dir: /p
+projects:
+  - {name: a, git: g, ignore_submodules: [""]}
+`, "ignore_submodules: path is required"},
+		{"duplicate ignored submodule", `
+projects_dir: /p
+projects:
+  - {name: a, git: g, ignore_submodules: [sub, sub]}
+`, "ignore_submodules: duplicate path sub"},
+		{"frozen and ignored submodule", `
+projects_dir: /p
+projects:
+  - name: a
+    git: g
+    submodules: [{path: sub, freeze_to: develop}]
+    ignore_submodules: [sub]
+`, "both configured for freeze and ignored"},
 		{"unknown field", `
 projects_dir: /p
 projekts:
@@ -396,6 +414,24 @@ projects:
 		if !strings.Contains(err.Error(), c.wantErr) {
 			t.Errorf("%s: error %q does not mention %q", c.name, err, c.wantErr)
 		}
+	}
+}
+
+func TestIgnoreSubmodulesLoads(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := Load(write(t, `
+projects_dir: /p
+projects:
+  - {name: a, git: g, ignore_submodules: [vendor/dash, vendor/service]}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := cfg.Projects[0].IgnoreSubmodules
+	if len(got) != 2 || got[0] != "vendor/dash" || got[1] != "vendor/service" {
+		t.Errorf("ignored submodules = %v", got)
 	}
 }
 

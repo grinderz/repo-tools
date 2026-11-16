@@ -61,6 +61,17 @@ func mrMode(rctx *run.Ctx, p *config.Project) bool {
 	return p.MR == config.MRAlways
 }
 
+func validateWaitMerge(rctx *run.Ctx, p *config.Project) error {
+	switch {
+	case !mrMode(rctx, p):
+		return errWaitMergeMRMode
+	case !rctx.WantFetchFor(p, true):
+		return errWaitMergeFetch
+	default:
+		return nil
+	}
+}
+
 // planMergeRequest renders the request a command would open for a commit on
 // target, nil when the mode is off. command names the command in the branch
 // template, so two commands run on the same day get branches of their own.
@@ -435,7 +446,11 @@ func dependsOn(rctx *run.Ctx, consumer, p *config.Project) bool {
 // mrWaitFor says whether the step waits for the request to be merged, and
 // for whom: the names the plan and the wait message carry, or nil when there
 // is no wait.
-func mrWaitFor(rctx *run.Ctx, p *config.Project) []string {
+func mrWaitFor(rctx *run.Ctx, p *config.Project, waitMerge bool) []string {
+	if waitMerge {
+		return []string{"wait: --wait-merge"}
+	}
+
 	switch rctx.Cfg.MergeRequest.Wait {
 	case config.MRWaitNone:
 		return nil
@@ -447,8 +462,8 @@ func mrWaitFor(rctx *run.Ctx, p *config.Project) []string {
 }
 
 // waitPlan is the plan's wording of the wait, empty when there is none.
-func waitPlan(rctx *run.Ctx, p *config.Project) string {
-	needs := mrWaitFor(rctx, p)
+func waitPlan(rctx *run.Ctx, p *config.Project, waitMerge bool) string {
+	needs := mrWaitFor(rctx, p, waitMerge)
 	if len(needs) == 0 {
 		return ""
 	}
@@ -521,6 +536,28 @@ func waitMerged(rctx *run.Ctx, r gitx.Repo, p *config.Project, url string, needs
 
 		time.Sleep(rctx.Cfg.CIPoll())
 	}
+}
+
+// refreshMergedBranch makes the merged change visible to commands that read
+// this project's working copy after --wait-merge, such as deps check.
+func refreshMergedBranch(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch string) error {
+	if !rctx.WantFetchFor(p, true) {
+		return errWaitMergeFetch
+	}
+
+	if err := fetch(rctx, p, r); err != nil {
+		return fetchFailed(err)
+	}
+
+	if err := checkoutTracking(r, branch); err != nil {
+		return fmt.Errorf("update %s after merge: %w", branch, err)
+	}
+
+	if _, err := r.Git("submodule", "update", "--recursive"); err != nil {
+		return fmt.Errorf("update submodules after merge: %w", err)
+	}
+
+	return nil
 }
 
 // mrQuery asks the project's CLI for the request's state. GitLab is asked by

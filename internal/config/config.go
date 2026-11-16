@@ -157,9 +157,10 @@ type Project struct {
 	// ReleaseBranch names the release branch this config works with, for a
 	// config that describes one release. It need not exist yet: release branch
 	// creates exactly it. Empty means "the highest release branch on origin".
-	ReleaseBranch string      `yaml:"release_branch"`
-	Submodules    []Submodule `yaml:"submodules"`
-	ProjectDir    string      `yaml:"project_dir"` // wins over projects_dir
+	ReleaseBranch    string      `yaml:"release_branch"`
+	Submodules       []Submodule `yaml:"submodules"`
+	IgnoreSubmodules []string    `yaml:"ignore_submodules"`
+	ProjectDir       string      `yaml:"project_dir"` // wins over projects_dir
 
 	dir string // resolved absolute path
 }
@@ -1116,6 +1117,23 @@ func (c *Config) prepareProject(p *Project) error {
 		return fmt.Errorf("project %s: %w", p.Name, errNoChangelogCmds)
 	}
 
+	if err := validateProjectSubmodules(p); err != nil {
+		return err
+	}
+
+	switch {
+	case p.ProjectDir != "":
+		p.dir = expandHome(p.ProjectDir)
+	case c.ProjectsDir != "":
+		p.dir = filepath.Join(c.ProjectsDir, p.Name)
+	default:
+		return fmt.Errorf("project %s: %w", p.Name, errNoProjectDir)
+	}
+
+	return nil
+}
+
+func validateProjectSubmodules(p *Project) error {
 	for _, s := range p.Submodules {
 		if s.Path == "" {
 			return fmt.Errorf("project %s: submodule path %w", p.Name, errRequired)
@@ -1126,13 +1144,23 @@ func (c *Config) prepareProject(p *Project) error {
 		}
 	}
 
-	switch {
-	case p.ProjectDir != "":
-		p.dir = expandHome(p.ProjectDir)
-	case c.ProjectsDir != "":
-		p.dir = filepath.Join(c.ProjectsDir, p.Name)
-	default:
-		return fmt.Errorf("project %s: %w", p.Name, errNoProjectDir)
+	ignored := make(map[string]bool, len(p.IgnoreSubmodules))
+	for _, path := range p.IgnoreSubmodules {
+		if path == "" {
+			return fmt.Errorf("project %s: ignore_submodules: path %w", p.Name, errRequired)
+		}
+
+		if ignored[path] {
+			return fmt.Errorf("project %s: ignore_submodules: %w %s", p.Name, errDuplicateIgnoredSubmodule, path)
+		}
+
+		ignored[path] = true
+	}
+
+	for _, s := range p.Submodules {
+		if ignored[s.Path] {
+			return fmt.Errorf("project %s: submodule %s %w", p.Name, s.Path, errFrozenIgnoredSubmodule)
+		}
 	}
 
 	return nil

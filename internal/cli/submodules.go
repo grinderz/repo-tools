@@ -26,6 +26,7 @@ type submodulesOpts struct {
 	NoCommit   bool
 	NoDeps     bool
 	AllowDirty bool
+	WaitMerge  bool
 }
 
 func newSubmodulesCmd(rctx *run.Ctx, name string) *cobra.Command {
@@ -100,13 +101,19 @@ func newSubmodulesCmd(rctx *run.Ctx, name string) *cobra.Command {
 	c.Flags().BoolVar(&opts.NoDeps, "no-deps", false, "skip the deps commands, only move the submodule pins")
 	c.Flags().BoolVar(&opts.AllowDirty, "allow-dirty", false,
 		"start on a working tree that already has changes, and commit them along (needs the diff review)")
+	c.Flags().BoolVar(&opts.WaitMerge, "wait-merge", false,
+		"wait for the MR to merge and update the target branch before returning")
 
 	return c
 }
 
 func planSubmodules(rctx *run.Ctx, p *config.Project, opts submodulesOpts) (run.Step, int, error) {
 	r := repoOf(p)
+
 	st := run.Step{Project: p}
+	if opts.WaitMerge && opts.NoCommit {
+		return st, 0, errWaitMergeCommit
+	}
 
 	if reason := missingRepo(r); reason != "" {
 		st.Skip, st.Warn = true, reason
@@ -139,6 +146,12 @@ func planSubmodules(rctx *run.Ctx, p *config.Project, opts submodulesOpts) (run.
 		return st, 0, nil
 	}
 
+	if opts.WaitMerge {
+		if err := validateWaitMerge(rctx, p); err != nil {
+			return st, 0, err
+		}
+	}
+
 	st.Plan = append(st.Plan, "checkout "+planRef(branch))
 	for _, t := range targets {
 		st.Plan = append(st.Plan, fmt.Sprintf("submodule %s -> head of %s, update --remote",
@@ -158,7 +171,8 @@ func planSubmodules(rctx *run.Ctx, p *config.Project, opts submodulesOpts) (run.
 		st.Plan = append(st.Plan, "leave the new pins uncommitted")
 	} else {
 		st.Plan = append(st.Plan,
-			commitPlanLines(rctx, p, cmdDepsSubmodules, branch, "any pin moved", submodulesMessage(rctx, p, branch))...)
+			commitPlanLines(rctx, p, cmdDepsSubmodules, branch, "any pin moved",
+				submodulesMessage(rctx, p, branch), opts.WaitMerge)...)
 	}
 
 	st.Exec = func() error { return updateSubmodules(rctx, p, branch, targets, opts) }
@@ -312,7 +326,8 @@ func updateSubmodules(
 
 	msg := submodulesMessage(rctx, p, branch)
 
-	return commitAndPush(rctx, r, p, cmdDepsSubmodules, branch, msg, "submodules already at the head of their branches")
+	return commitAndPush(rctx, r, p, cmdDepsSubmodules, branch, msg,
+		"submodules already at the head of their branches", opts.WaitMerge)
 }
 
 // submodulesMessage is the commit message deps submodules would use.

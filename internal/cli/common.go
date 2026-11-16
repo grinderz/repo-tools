@@ -188,7 +188,9 @@ func planHash(short string) string { return run.Yellow(short) }
 // commitPlanLines describe the commit step: what would be pushed where, and
 // with which message — the message is as much a decision as the diff, and
 // waiting for the prompt to see it is too late in a dry run.
-func commitPlanLines(rctx *run.Ctx, p *config.Project, command, branch, condition, msg string) []string {
+func commitPlanLines(
+	rctx *run.Ctx, p *config.Project, command, branch, condition, msg string, waitMerge bool,
+) []string {
 	line := fmt.Sprintf("commit+push to %s if %s", planRef("origin/"+branch), condition)
 
 	m := planMergeRequest(rctx, p, command, branch, msg)
@@ -203,7 +205,7 @@ func commitPlanLines(rctx *run.Ctx, p *config.Project, command, branch, conditio
 	line += ciPlanSuffix(rctx, p)
 
 	if m != nil {
-		line += waitPlan(rctx, p)
+		line += waitPlan(rctx, p, waitMerge)
 	}
 
 	return []string{line, "message: " + planMsg(fmt.Sprintf("%q", msg))}
