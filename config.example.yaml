@@ -343,6 +343,7 @@ projects:
         freeze_to: develop    # or: release
       - path: .dev-include
         freeze_to: develop
+    ignore_submodules: [vendor/third-party] # leave this submodule at its pinned commit
     project_dir: ""           # wins over the global projects_dir
 
   # A go service that releases from another branch than the default, keeps its

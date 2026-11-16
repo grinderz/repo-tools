@@ -275,7 +275,21 @@ func TestCheckSubmodulesAgainstConfig(t *testing.T) {
 		t.Errorf("got %v", issues)
 	}
 
+	p.IgnoreSubmodules = []string{"sub"}
+	if issues := checkSubmodules(testCtx(), r, p); len(issues) != 0 {
+		t.Errorf("ignored submodule should not require a freeze: %v", issues)
+	}
+
+	p.IgnoreSubmodules = []string{"missing"}
+
+	issues = checkSubmodules(testCtx(), r, p)
+	if len(issues) != 2 ||
+		!strings.Contains(strings.Join(issues, " "), "ignored submodule missing is not in .gitmodules") {
+		t.Errorf("stale ignore should be reported alongside the unconfigured submodule: %v", issues)
+	}
+
 	p.DepsFreeze = nil
+	p.IgnoreSubmodules = nil
 
 	if issues := checkSubmodules(testCtx(), r, p); len(issues) != 0 {
 		t.Errorf("without freezing an unconfigured submodule is fine: %v", issues)
@@ -420,7 +434,7 @@ func TestFreezeDepsRunsTheConfiguredDepsCmds(t *testing.T) {
 
 	captureOutput(t, func() {
 		// No origin in the fixture, so the push fails after the commit.
-		_ = freezeDeps(rctx, p, "release-1.0", false, false)
+		_ = freezeDeps(rctx, p, "release-1.0", false, false, false)
 	})
 
 	body, err := os.ReadFile(filepath.Join(f.parent, "deps.txt"))
@@ -451,14 +465,56 @@ func TestPlanFreezeDepsHonoursNoDeps(t *testing.T) {
 
 	git(t, f.parent, "checkout", "--quiet", "release-1.0")
 
-	step, err := planFreezeDeps(rctx, p, "release-1.0", false, false)
+	step, err := planFreezeDeps(rctx, p, "release-1.0", false, false, false)
 	if err != nil || !strings.Contains(strings.Join(step.Plan, "\n"), "deps (uv): uv sync") {
 		t.Errorf("plan = %v (warn %q, err %v)", step.Plan, step.Warn, err)
 	}
 
-	step, err = planFreezeDeps(rctx, p, "release-1.0", true, false)
+	step, err = planFreezeDeps(rctx, p, "release-1.0", true, false, false)
 	if err != nil || strings.Contains(strings.Join(step.Plan, "\n"), "deps (") {
 		t.Errorf("--no-deps should not plan deps commands: %v (err %v)", step.Plan, err)
+	}
+}
+
+func TestPlanFreezeDepsWaitMerge(t *testing.T) {
+	t.Parallel()
+
+	_, rctx, p := mrFixture(t)
+	on := true
+	p.DepsFreeze = &on
+
+	p.MR = config.MRNone
+	if _, err := planFreezeDeps(rctx, p, "release-1.0", true, false, true); err == nil ||
+		!strings.Contains(err.Error(), "requires MR mode") {
+		t.Errorf("MR mode off with --wait-merge: %v", err)
+	}
+
+	p.MR = config.MRAlways
+
+	if _, err := planFreezeDeps(rctx, p, "release-1.0", true, false, true); err == nil ||
+		!strings.Contains(err.Error(), "requires fetch") {
+		t.Errorf("--no-fetch with --wait-merge: %v", err)
+	}
+
+	rctx.FetchFlag = nil
+
+	step, err := planFreezeDeps(rctx, p, "release-1.0", true, false, true)
+	if err != nil || step.Skip {
+		t.Fatalf("plan = %+v, err %v", step, err)
+	}
+
+	if !strings.Contains(strings.Join(step.Plan, "\n"), "then wait for the MR to be merged (wait: --wait-merge)") {
+		t.Errorf("plan does not describe the wait: %v", step.Plan)
+	}
+
+	off := false
+	p.DepsFreeze = &off
+	p.MR = config.MRNone
+	rctx.FetchFlag = &offline
+
+	step, err = planFreezeDeps(rctx, p, "release-1.0", true, false, true)
+	if err != nil || !step.Skip {
+		t.Errorf("project without freeze should skip: %+v, err %v", step, err)
 	}
 }
 
@@ -473,7 +529,7 @@ func TestPlanFreezeDepsRefusesAPendingReleaseBranch(t *testing.T) {
 	depsFreeze := true
 	p.DepsFreeze = &depsFreeze
 
-	step, err := planFreezeDeps(testCtx(), p, "release-9.9", false, false)
+	step, err := planFreezeDeps(testCtx(), p, "release-9.9", false, false, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -500,12 +556,12 @@ func TestPlanFreezeDepsWarnsAboutTheReleaseBranchSubmodules(t *testing.T) {
 
 	git(t, f.parent, "branch", "release-2.0", git(t, f.parent, "rev-list", "--max-parents=0", "HEAD"))
 
-	step, err := planFreezeDeps(testCtx(), p, "release-2.0", false, false)
+	step, err := planFreezeDeps(testCtx(), p, "release-2.0", false, false, false)
 	if err != nil || step.Warn != "" {
 		t.Errorf("no submodules there, nothing to warn about: %q (err %v)", step.Warn, err)
 	}
 
-	step, err = planFreezeDeps(testCtx(), p, "release-1.0", false, false)
+	step, err = planFreezeDeps(testCtx(), p, "release-1.0", false, false, false)
 	if err != nil || !strings.Contains(step.Warn, "none are configured for freeze") {
 		t.Errorf("the submodule on release-1.0 is unconfigured: %q (err %v)", step.Warn, err)
 	}
@@ -559,7 +615,7 @@ func TestFreezeDepsSkipsSubmodulesMissingOnTheBranch(t *testing.T) {
 
 	out := captureOutput(t, func() {
 		// No origin in the fixture, so the push at the end fails.
-		_ = freezeDeps(testCtx(), p, "release-1.0", true, false)
+		_ = freezeDeps(testCtx(), p, "release-1.0", true, false, false)
 	})
 
 	if !strings.Contains(out, "WARNING: gone is not in .gitmodules") {
@@ -772,6 +828,13 @@ func TestFreezeListDerivedFromProjects(t *testing.T) {
 	if len(derived) != 1 || derived[0].Path != "sub" || derived[0].FreezeTo != config.FreezeToProject {
 		t.Fatalf("derived = %+v", derived)
 	}
+
+	p.IgnoreSubmodules = []string{"sub"}
+	if ignored, err := freezeList(rctx, r, p, ""); err != nil || len(ignored) != 0 {
+		t.Errorf("ignored configured project should be excluded from freeze: %+v %v", ignored, err)
+	}
+
+	p.IgnoreSubmodules = nil
 
 	// It resolves to the branch that project works on in this config.
 	target, err := resolveFreezeBranch(rctx, r, p, derived[0], "")

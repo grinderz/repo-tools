@@ -101,6 +101,49 @@ func TestConfiguredSubmodulesFollowTheConfig(t *testing.T) {
 	}
 }
 
+func TestPlanSubmodulesWaitMerge(t *testing.T) {
+	t.Parallel()
+
+	_, rctx, p := mrFixture(t)
+	opts := submodulesOpts{WaitMerge: true}
+
+	if _, _, err := planSubmodules(rctx, p, submodulesOpts{WaitMerge: true, NoCommit: true}); err == nil ||
+		!strings.Contains(err.Error(), "requires a commit") {
+		t.Errorf("--no-commit with --wait-merge: %v", err)
+	}
+
+	p.MR = config.MRNone
+	if _, _, err := planSubmodules(rctx, p, opts); err == nil || !strings.Contains(err.Error(), "requires MR mode") {
+		t.Errorf("MR mode off with --wait-merge: %v", err)
+	}
+
+	p.MR = config.MRAlways
+
+	if _, _, err := planSubmodules(rctx, p, opts); err == nil || !strings.Contains(err.Error(), "requires fetch") {
+		t.Errorf("--no-fetch with --wait-merge: %v", err)
+	}
+
+	rctx.FetchFlag = nil
+
+	step, found, err := planSubmodules(rctx, p, opts)
+	if err != nil || found != 1 {
+		t.Fatalf("plan = %+v, found %d, err %v", step, found, err)
+	}
+
+	if !strings.Contains(strings.Join(step.Plan, "\n"), "then wait for the MR to be merged (wait: --wait-merge)") {
+		t.Errorf("plan does not describe the wait: %v", step.Plan)
+	}
+
+	p.IgnoreSubmodules = []string{"sub"}
+	p.MR = config.MRNone
+	rctx.FetchFlag = &offline
+
+	step, found, err = planSubmodules(rctx, p, opts)
+	if err != nil || found != 0 || !step.Skip {
+		t.Errorf("project without managed submodules should skip: %+v, found %d, err %v", step, found, err)
+	}
+}
+
 // A submodule with no branch in .gitmodules must be reported, not moved:
 // --remote would otherwise follow whatever the remote's default branch is.
 func TestTrackedSubmodulesSeparatesBranchlessOnes(t *testing.T) {

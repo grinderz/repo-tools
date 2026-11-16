@@ -91,7 +91,7 @@ func planChangelog(rctx *run.Ctx, p *config.Project, branchOverride string) run.
 	}
 
 	st.Plan = append(st.Plan,
-		commitPlanLines(rctx, p, cmdChangelogUpdate, branch, "files changed", changelogMessage(rctx, p, branch))...)
+		commitPlanLines(rctx, p, cmdChangelogUpdate, branch, "files changed", changelogMessage(rctx, p, branch), false)...)
 	st.Exec = func() error { return runChangelog(rctx, p, branch) }
 
 	return st
@@ -210,5 +210,5 @@ func runChangelog(rctx *run.Ctx, p *config.Project, branch string) error {
 
 	msg := changelogMessage(rctx, p, branch)
 
-	return commitAndPush(rctx, r, p, cmdChangelogUpdate, branch, msg, "no changelog changes")
+	return commitAndPush(rctx, r, p, cmdChangelogUpdate, branch, msg, "no changelog changes", false)
 }

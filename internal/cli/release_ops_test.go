@@ -384,7 +384,7 @@ func TestPlanReleaseSkipsProjectsWithReleasesOff(t *testing.T) {
 	on := true
 	p.DepsFreeze = &on
 
-	step, err = planFreezeDeps(testCtx(), p, "", false, false)
+	step, err = planFreezeDeps(testCtx(), p, "", false, false, false)
 	if err != nil || !step.Skip || step.Warn != releasesOff {
 		t.Errorf(
 			"deps freeze: err=%v skip=%v warn=%q, want the release reason over the freeze one",

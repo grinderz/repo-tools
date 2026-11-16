@@ -308,6 +308,14 @@ func checkSubmoduleSet(
 
 	configured := make(map[string]bool, len(submodules))
 
+	ignored := make(map[string]bool, len(p.IgnoreSubmodules))
+	for _, path := range p.IgnoreSubmodules {
+		ignored[path] = true
+		if !have[path] {
+			issues = append(issues, fmt.Sprintf("ignored submodule %s is not in .gitmodules", path))
+		}
+	}
+
 	for _, sm := range submodules {
 		configured[sm.Path] = true
 
@@ -328,7 +336,7 @@ func checkSubmoduleSet(
 	}
 
 	for _, a := range actual {
-		if !configured[a] && p.DepsFreezeEnabled() {
+		if !configured[a] && !ignored[a] && p.DepsFreezeEnabled() {
 			issues = append(issues, fmt.Sprintf("submodule %s is in .gitmodules but not configured for freeze", a))
 		}
 	}

@@ -19,6 +19,7 @@ func newFreezeDepsCmd(rctx *run.Ctx, name string) *cobra.Command {
 	var (
 		releaseBranch      string
 		noDeps, allowDirty bool
+		waitMerge          bool
 	)
 
 	c := &cobra.Command{
@@ -36,7 +37,7 @@ func newFreezeDepsCmd(rctx *run.Ctx, name string) *cobra.Command {
 			steps := make([]run.Step, 0, len(projects))
 
 			for _, p := range projects {
-				st, err := planFreezeDeps(rctx, p, releaseBranch, noDeps, allowDirty)
+				st, err := planFreezeDeps(rctx, p, releaseBranch, noDeps, allowDirty, waitMerge)
 				if err != nil {
 					return fmt.Errorf("%s: %w", p.Name, err)
 				}
@@ -61,6 +62,8 @@ func newFreezeDepsCmd(rctx *run.Ctx, name string) *cobra.Command {
 	c.Flags().BoolVar(&noDeps, "no-deps", false, "skip the deps commands, only move the submodule pins")
 	c.Flags().BoolVar(&allowDirty, "allow-dirty", false,
 		"start on a working tree that already has changes, and commit them along (needs the diff review)")
+	c.Flags().BoolVar(&waitMerge, "wait-merge", false,
+		"wait for the MR to merge and update the release branch before returning")
 
 	return c
 }
@@ -82,7 +85,7 @@ func planFreezeDeps(
 	rctx *run.Ctx,
 	p *config.Project,
 	releaseBranch string,
-	noDeps, allowDirty bool,
+	noDeps, allowDirty, waitMerge bool,
 ) (run.Step, error) {
 	r := repoOf(p)
 	st := run.Step{Project: p}
@@ -113,6 +116,12 @@ func planFreezeDeps(
 		st.Skip, st.Warn = true, pending
 
 		return st, nil
+	}
+
+	if waitMerge {
+		if err := validateWaitMerge(rctx, p); err != nil {
+			return st, err
+		}
 	}
 
 	st.Plan = append(st.Plan, "checkout "+planRef(branch))
@@ -146,8 +155,8 @@ func planFreezeDeps(
 	}
 
 	st.Plan = append(st.Plan,
-		commitPlanLines(rctx, p, cmdDepsFreeze, branch, "anything changed", freezeMessage(rctx, p, branch))...)
-	st.Exec = func() error { return freezeDeps(rctx, p, branch, noDeps, allowDirty) }
+		commitPlanLines(rctx, p, cmdDepsFreeze, branch, "anything changed", freezeMessage(rctx, p, branch), waitMerge)...)
+	st.Exec = func() error { return freezeDeps(rctx, p, branch, noDeps, allowDirty, waitMerge) }
 
 	return st, nil
 }
@@ -168,6 +177,10 @@ func freezeList(rctx *run.Ctx, r gitx.Repo, p *config.Project, ref string) ([]co
 	derived := make([]config.Submodule, 0, len(paths))
 
 	for _, path := range paths {
+		if slices.Contains(p.IgnoreSubmodules, path) {
+			continue
+		}
+
 		url, err := r.SubmoduleURLAt(ref, path)
 		if err != nil {
 			continue
@@ -331,7 +344,7 @@ func submoduleReleaseSource(rctx *run.Ctx, p *config.Project, url string) (strin
 	return p.ReleaseBranchPrefix, nil
 }
 
-func freezeDeps(rctx *run.Ctx, p *config.Project, branch string, noDeps, allowDirty bool) error {
+func freezeDeps(rctx *run.Ctx, p *config.Project, branch string, noDeps, allowDirty, waitMerge bool) error {
 	r := repoOf(p)
 	if err := startDirty(rctx, r, allowDirty); err != nil {
 		return err
@@ -386,7 +399,7 @@ func freezeDeps(rctx *run.Ctx, p *config.Project, branch string, noDeps, allowDi
 
 	msg := freezeMessage(rctx, p, branch)
 
-	return commitAndPush(rctx, r, p, cmdDepsFreeze, branch, msg, "nothing to freeze, already up to date")
+	return commitAndPush(rctx, r, p, cmdDepsFreeze, branch, msg, "nothing to freeze, already up to date", waitMerge)
 }
 
 func freezeSubmodule(rctx *run.Ctx, r gitx.Repo, p *config.Project, sm config.Submodule) error {
@@ -426,7 +439,9 @@ func freezeMessage(rctx *run.Ctx, p *config.Project, branch string) string {
 // staged diff is shown and confirmed first; a project with ci set then has
 // the pipeline of the pushed commit watched.
 // command names the caller for the merge request branch, when that mode is on.
-func commitAndPush(rctx *run.Ctx, r gitx.Repo, p *config.Project, command, branch, msg, noChanges string) error {
+func commitAndPush(
+	rctx *run.Ctx, r gitx.Repo, p *config.Project, command, branch, msg, noChanges string, waitMerge bool,
+) error {
 	changed, err := r.Git("status", "--porcelain")
 	if err != nil {
 		return err
@@ -460,20 +475,7 @@ func commitAndPush(rctx *run.Ctx, r gitx.Repo, p *config.Project, command, branc
 	}
 
 	if m != nil {
-		sha, url, err := commitToMergeRequest(rctx, r, p, m, msg)
-		if err != nil {
-			return err
-		}
-
-		if err := watchCIOn(rctx, r, p, ciRevision{SHA: sha, Ref: m.Branch, Request: true}, msg); err != nil {
-			return err
-		}
-
-		if needs := mrWaitFor(rctx, p); len(needs) > 0 {
-			return waitMerged(rctx, r, p, url, needs)
-		}
-
-		return nil
+		return commitAndWaitForMerge(rctx, r, p, m, branch, msg, waitMerge)
 	}
 
 	if _, err := r.Git("commit", "-m", msg); err != nil {
@@ -490,4 +492,32 @@ func commitAndPush(rctx *run.Ctx, r gitx.Repo, p *config.Project, command, branc
 	}
 
 	return watchCI(rctx, r, p, sha, branch, msg)
+}
+
+func commitAndWaitForMerge(
+	rctx *run.Ctx, r gitx.Repo, p *config.Project, m *mergeRequest, branch, msg string, waitMerge bool,
+) error {
+	sha, url, err := commitToMergeRequest(rctx, r, p, m, msg)
+	if err != nil {
+		return err
+	}
+
+	if err := watchCIOn(rctx, r, p, ciRevision{SHA: sha, Ref: m.Branch, Request: true}, msg); err != nil {
+		return err
+	}
+
+	needs := mrWaitFor(rctx, p, waitMerge)
+	if len(needs) == 0 {
+		return nil
+	}
+
+	if err := waitMerged(rctx, r, p, url, needs); err != nil {
+		return err
+	}
+
+	if waitMerge {
+		return refreshMergedBranch(rctx, r, p, branch)
+	}
+
+	return nil
 }

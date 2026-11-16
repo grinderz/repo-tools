@@ -132,7 +132,7 @@ func planToolchain(rctx *run.Ctx, p *config.Project, opts toolchainOpts) (run.St
 		st.Plan = append(st.Plan, "leave the changes uncommitted")
 	} else {
 		st.Plan = append(st.Plan,
-			commitPlanLines(rctx, p, cmdDepsToolchain, branch, "anything changed", message)...)
+			commitPlanLines(rctx, p, cmdDepsToolchain, branch, "anything changed", message, false)...)
 	}
 
 	st.Exec = func() error { return bumpToolchain(rctx, p, branch, opts) }
@@ -231,7 +231,7 @@ func bumpToolchain(rctx *run.Ctx, p *config.Project, branch string, opts toolcha
 	}
 
 	return commitAndPush(rctx, r, p, cmdDepsToolchain, branch, expand(rctx.Cfg.ToolchainCommitMessageFor(p), vars),
-		toolchainUnchanged)
+		toolchainUnchanged, false)
 }
 
 // toolchainCheckProject reads a project's pins and runs its

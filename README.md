@@ -381,6 +381,14 @@ what identifies a submodule inside one project. Submodules that belong to no
 configured project are left alone, and `derive_submodules: false` turns the
 whole thing off.
 
+With `deps_freeze: true`, `repo check` reports each submodule in `.gitmodules`
+that is neither configured for freeze nor listed in the project's
+`ignore_submodules`. Use `ignore_submodules: [vendor/dashboards, vendor/service]` for
+submodules intentionally kept at their pinned commits. Ignored paths are also
+excluded from automatic derivation, even when their remote is another project
+in the config. A path cannot be both frozen and ignored; `repo check` reports
+ignored paths absent from `.gitmodules` on the release branch.
+
 **One config per release.** A project may name the release branch it works
 with:
 
@@ -944,7 +952,12 @@ rt changelog update api --branch release-1.5
 rt deps freeze                                    # the highest release branch
 rt deps freeze api --release-branch release-1.4   # an older one, one project
 rt deps freeze --no-deps                          # move the pins, run no deps commands
+rt deps freeze --wait-merge                       # wait for its MR, then refresh the release checkout
 ```
+
+`--wait-merge` on `deps freeze` has the same MR and fetch requirements as on
+`deps submodules`. A flow that runs `deps submodules` after a freeze needs the
+freeze's MR merged first, so both steps can use the flag before `deps check`.
 
 On the release branch it rewrites the submodule branches in `.gitmodules`,
 fetches inside each submodule and runs `git submodule update --remote` — the
@@ -1000,7 +1013,16 @@ rt deps submodules --no-deps                # move the pins, run no deps command
 rt deps submodules --no-commit              # update the working tree, commit nothing
 rt deps submodules --allow-dirty            # finish what a --no-commit run left
 rt deps submodules --mr                     # commit to a branch and open a merge request
+rt deps submodules --wait-merge             # wait for its MR, then refresh the target checkout
 ```
+
+`--wait-merge` makes a flow wait for this step's MR even when
+`merge_request.wait: dependents` finds no later dependent project. After the
+merge it fetches and fast-forwards the target branch, then updates its checked
+out submodules, so the next step (such as `deps check`) reads the merged state.
+With no changes to commit, there is no MR to wait for. The flag needs MR mode
+and fetching; it cannot be combined with `--no-commit`, `--no-mr`, or
+`--no-fetch`.
 
 `--no-commit` leaves its work in the tree, which the next ordinary run refuses
 to start on. `--allow-dirty` is the way to finish it: the run begins on the
