@@ -1,8 +1,12 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -289,6 +293,185 @@ func trackedSubmodules(r gitx.Repo, ref string, only []string) ([]submoduleTarge
 	return targets, untracked, nil
 }
 
+// checkoutDepsBranch also brings ignored worktrees to the target branch's pins.
+// Otherwise a clean checkout on the old branch can become a pending pin change
+// which the dependency commit's git add -A would pick up.
+func checkoutDepsBranch(r gitx.Repo, branch string, ignored []string) error {
+	if len(ignored) == 0 {
+		return checkoutTracking(r, branch)
+	}
+
+	ref := branchRef(r, branch)
+	if ref == "" {
+		return checkoutTracking(r, branch)
+	}
+
+	pins, err := changedSubmodulePins(r, ref, ignored)
+	if err != nil {
+		return err
+	}
+
+	changed := slices.Concat(pins.updated, pins.removed)
+	if len(changed) == 0 {
+		return checkoutTracking(r, branch)
+	}
+
+	// Even under --allow-dirty, switching pins must not discard local work.
+	statusArgs := []string{literalPaths, "status", "--porcelain", "--ignore-submodules=none", "--"}
+
+	status, err := r.Git(append(statusArgs, changed...)...)
+	if err != nil {
+		return err
+	}
+
+	if status != "" {
+		return fmt.Errorf("cannot switch ignored submodule pins: %w\n%s", errDirty, status)
+	}
+
+	if err := checkoutWithoutRemovedPins(r, branch, pins.removed); err != nil || len(pins.updated) == 0 {
+		return err
+	}
+
+	// Leave uninitialised submodules alone. The index already has their pin.
+	updateArgs := []string{literalPaths, "submodule", "update", "--checkout", "--recursive", "--"}
+	_, err = r.Git(append(updateArgs, pins.updated...)...)
+
+	return err
+}
+
+const literalPaths = "--literal-pathspecs"
+
+type submodulePinChanges struct {
+	updated []string
+	removed []string
+}
+
+// The tree modes distinguish gitlinks from ordinary files. -z preserves paths
+// verbatim, and disabling rename detection gives a removal and an addition.
+func changedSubmodulePins(r gitx.Repo, ref string, only []string) (submodulePinChanges, error) {
+	var pins submodulePinChanges
+
+	args := []string{literalPaths, "diff", "--raw", "-z", "--no-renames", "--ignore-submodules=none", "HEAD", ref, "--"}
+
+	out, err := r.Stdout("git", append(args, only...)...)
+	if err != nil {
+		return pins, err
+	}
+
+	for out != "" {
+		var meta, path string
+
+		meta, out, _ = strings.Cut(out, "\x00")
+		path, out, _ = strings.Cut(out, "\x00")
+
+		if len(only) > 0 && !slices.Contains(only, path) {
+			continue
+		}
+
+		oldMode, rest, _ := strings.Cut(meta, " ")
+		newMode, _, _ := strings.Cut(rest, " ")
+
+		switch {
+		case newMode == "160000":
+			pins.updated = append(pins.updated, path)
+		case oldMode == ":160000" && (gitx.Repo{Dir: filepath.Join(r.Dir, path)}).IsRepoRoot():
+			pins.removed = append(pins.removed, path)
+		}
+	}
+
+	return pins, nil
+}
+
+// A plain checkout leaves the old submodule as an untracked repository when
+// the target deletes it. Let Git remove its checkout while the index still
+// knows the gitlink, otherwise git add -A would resurrect it on the target.
+func checkoutWithoutRemovedPins(r gitx.Repo, branch string, removed []string) error {
+	if len(removed) == 0 {
+		return checkoutTracking(r, branch)
+	}
+
+	// An empty tree removes only the gitlink's checkout. The target may have
+	// regular files at the same path, which the branch checkout must install.
+	emptyTree, err := r.Git("mktree")
+	if err != nil {
+		return err
+	}
+
+	branches := make(map[string]string, len(removed))
+	for _, path := range removed {
+		sub := gitx.Repo{Dir: filepath.Join(r.Dir, path)}
+
+		current, err := sub.CurrentBranch()
+		if err != nil {
+			return err
+		}
+
+		branches[path] = current
+	}
+
+	args := []string{literalPaths, "restore", "--recurse-submodules", "--worktree", "--source=" + emptyTree, "--"}
+
+	_, err = r.Git(append(args, removed...)...)
+	if err == nil {
+		err = checkRemovedWorktrees(r, removed)
+	}
+
+	if err == nil {
+		err = checkoutTracking(r, branch)
+	}
+
+	if err == nil {
+		return nil
+	}
+
+	for _, path := range removed {
+		err = errors.Join(err, restoreRemovedWorktree(r, path, branches[path]))
+	}
+
+	return err
+}
+
+// A checkout can fail before switching branches, or after it switched but
+// could not fast-forward. Recreate only worktrees the current index needs.
+func restoreRemovedWorktree(r gitx.Repo, path, branch string) error {
+	tracked, err := r.Stdout("git", literalPaths, "ls-files", "--stage", "-z", "--", path)
+	if err != nil {
+		return err
+	}
+
+	meta, name, _ := strings.Cut(tracked, "\t")
+	if !strings.HasPrefix(meta, "160000 ") || name != path+"\x00" {
+		return nil
+	}
+
+	_, err = r.Git(literalPaths, "restore", "--recurse-submodules", "--worktree", "--", path)
+	if err != nil || branch == "HEAD" {
+		return err
+	}
+
+	sub := gitx.Repo{Dir: filepath.Join(r.Dir, path)}
+	_, err = sub.Git("checkout", branch)
+
+	return err
+}
+
+// Git leaves untracked files behind, including files ignored only inside the
+// submodule. Keep them out of the release commit and restore their worktree.
+func checkRemovedWorktrees(r gitx.Repo, removed []string) error {
+	for _, path := range removed {
+		entries, err := os.ReadDir(filepath.Join(r.Dir, path))
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("inspect removed submodule %s: %w", path, err)
+		}
+
+		if len(entries) > 0 {
+			return fmt.Errorf("cannot remove submodule %s with local files: %w", path, errDirty)
+		}
+	}
+
+	return nil
+}
+
 func updateSubmodules(
 	rctx *run.Ctx,
 	p *config.Project,
@@ -301,7 +484,7 @@ func updateSubmodules(
 		return err
 	}
 
-	if err := checkoutTracking(r, branch); err != nil {
+	if err := checkoutDepsBranch(r, branch, p.IgnoreSubmodules); err != nil {
 		return err
 	}
 

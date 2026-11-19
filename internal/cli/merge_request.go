@@ -2,7 +2,11 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -235,6 +239,16 @@ func commitToMergeRequest(
 		return "", "", m.BodyErr
 	}
 
+	_, release := gitx.ParseReleaseBranch(m.Branch, p.ReleaseBranchPrefix)
+	if m.Branch == m.Target || m.Branch == p.DevBranch || m.Branch == p.ReleaseBranch || release {
+		return "", "", fmt.Errorf("%s: %w", m.Branch, errMRSourceReserved)
+	}
+
+	lease, err := mrPushLease(rctx, r, p, m)
+	if err != nil {
+		return "", "", err
+	}
+
 	// -B: a rerun on the same day rewrites the branch from today's target
 	// head, so the request always carries one fresh commit, not a chain of
 	// stale bumps on top of each other.
@@ -251,10 +265,7 @@ func commitToMergeRequest(
 		return "", "", err
 	}
 
-	// force-with-lease: the branch is this command's own, and the plan-time
-	// fetch made the remote-tracking ref current, so the only rewrite it
-	// permits is of what the previous run pushed.
-	if err := remoteGit(rctx, r, "push", "--no-follow-tags", "--force-with-lease", "-u", "origin", m.Branch); err != nil {
+	if err := remoteGit(rctx, r, "push", "--no-follow-tags", lease, "-u", "origin", m.Branch); err != nil {
 		return "", "", err
 	}
 
@@ -271,19 +282,60 @@ func commitToMergeRequest(
 		return "", "", err
 	}
 
-	if _, err := r.Git("submodule", "update", "--recursive"); err != nil {
+	if _, err := r.Git("submodule", "update", "--checkout", "--recursive"); err != nil {
 		return "", "", err
 	}
 
 	return sha, url, nil
 }
 
+// Verify the request's target before rewriting its source. Bind the push to
+// the observed commit even when another fetch runs while the commit is made.
+func mrPushLease(rctx *run.Ctx, r gitx.Repo, p *config.Project, m *mergeRequest) (string, error) {
+	existing, err := existingMergeRequest(r, p, m)
+	if err != nil {
+		return "", err
+	}
+
+	source := "refs/heads/" + m.Branch
+
+	var expected string
+
+	switch {
+	case r.RemoteBranchExists(m.Branch):
+		expected, err = r.Git("rev-parse", "refs/remotes/origin/"+m.Branch)
+	case rctx.WantFetchFor(p, true) && (existing != "" || r.LocalBranchExists(m.Branch)):
+		// A single-branch clone may only know the source from its previous run.
+		remote, readErr := r.Stdout("git", "ls-remote", "--refs", "origin", source)
+		if readErr != nil {
+			return "", readErr
+		}
+
+		expected, _, _ = strings.Cut(remote, "\t")
+	}
+
+	if err != nil {
+		return "", err
+	}
+
+	if expected != "" && existing == "" {
+		// After the request closes, a fetch can bring in someone else's
+		// changes. A tracking ref alone does not identify our previous tip.
+		local, readErr := r.Git("rev-parse", "--verify", source)
+		if readErr != nil || local != expected {
+			return "", fmt.Errorf("%s: %w", m.Branch, errMRSourceChanged)
+		}
+	}
+
+	return "--force-with-lease=" + source + ":" + expected, nil
+}
+
 // openMergeRequest opens the request through the project's CLI, or finds the
 // one already open for the branch — a rerun updates the branch, not the
 // request. It returns the request's URL.
 func openMergeRequest(r gitx.Repo, p *config.Project, m *mergeRequest) (string, error) {
-	if url := existingMergeRequest(r, p, m); url != "" {
-		return url, nil
+	if existing, err := existingMergeRequest(r, p, m); existing != "" || err != nil {
+		return existing, err
 	}
 
 	var (
@@ -298,10 +350,10 @@ func openMergeRequest(r gitx.Repo, p *config.Project, m *mergeRequest) (string, 
 			"--source-branch", m.Branch, "--target-branch", m.Target,
 			"--title", m.Title, "--remove-source-branch", "--yes",
 		}
-		out, err = r.Output("glab", append(args, m.args("--description")...)...)
+		out, err = r.Stdout("glab", append(args, m.args("--description")...)...)
 	case config.CIGitHub:
 		args := []string{"pr", mrCreate, "--head", m.Branch, "--base", m.Target, "--title", m.Title}
-		out, err = r.Output("gh", append(args, m.args("--body")...)...)
+		out, err = r.Stdout("gh", append(args, m.args("--body")...)...)
 	default:
 		return "", fmt.Errorf("%w %q", errUnknownCI, p.CI)
 	}
@@ -313,40 +365,108 @@ func openMergeRequest(r gitx.Repo, p *config.Project, m *mergeRequest) (string, 
 	return lastLine(out), nil
 }
 
-// existingMergeRequest is the URL of the open request for the branch, empty
-// when there is none or the lookup fails — a failed lookup falls through to
-// creating one, which then says clearly whether one exists.
-func existingMergeRequest(r gitx.Repo, p *config.Project, m *mergeRequest) string {
+// existingMergeRequest checks every open request for the source before a
+// branch rewrite. Forks can have identically named branches of their own.
+func existingMergeRequest(r gitx.Repo, p *config.Project, m *mergeRequest) (string, error) {
 	var (
 		out string
 		err error
 	)
 
+	source := url.QueryEscape(m.Branch)
+
 	switch p.CI {
 	case config.CIGitLab:
-		out, err = r.Output("glab", "api",
-			"projects/:id/merge_requests?state=opened&source_branch="+m.Branch)
+		out, err = r.Stdout("glab", "api", "projects/:id/merge_requests?state=opened&source_branch="+source, "--paginate")
 	case config.CIGitHub:
-		out, err = r.Output("gh", "pr", "list", "--state", "open", "--head", m.Branch, "--json", "url")
+		out, err = r.Stdout("gh", "api", "repos/{owner}/{repo}/pulls?state=open&head={owner}:"+source, "--paginate")
 	default:
-		return ""
+		return "", fmt.Errorf("%w %q", errUnknownCI, p.CI)
 	}
 
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("find open request for %s: %w", m.Branch, err)
 	}
 
-	// The two CLIs spell the field differently; both are read.
-	var found []struct {
-		WebURL string `json:"web_url"` //nolint:tagliatelle // GitLab's own field name
-		URL    string `json:"url"`
+	return matchingRequest(out, m)
+}
+
+type pullRequestRef struct {
+	Ref  string `json:"ref"`
+	Repo struct {
+		ID int64 `json:"id"`
+	} `json:"repo"`
+}
+
+type openRequest struct {
+	WebURL          string         `json:"web_url"`           //nolint:tagliatelle // GitLab field
+	TargetBranch    string         `json:"target_branch"`     //nolint:tagliatelle // GitLab field
+	SourceProjectID int64          `json:"source_project_id"` //nolint:tagliatelle // GitLab field
+	TargetProjectID int64          `json:"target_project_id"` //nolint:tagliatelle // GitLab field
+	HTMLURL         string         `json:"html_url"`          //nolint:tagliatelle // GitHub field
+	Head            pullRequestRef `json:"head"`
+	Base            pullRequestRef `json:"base"`
+}
+
+func (item openRequest) urlFor(m *mergeRequest) (string, error) {
+	if item.TargetProjectID == 0 && item.Base.Repo.ID == 0 {
+		return "", errInvalidMRList
 	}
 
-	if json.Unmarshal([]byte(out), &found) != nil || len(found) == 0 {
-		return ""
+	if item.SourceProjectID != item.TargetProjectID || item.Head.Repo.ID != item.Base.Repo.ID {
+		return "", nil
 	}
 
-	return firstNonEmptyString(found[0].WebURL, found[0].URL)
+	target := firstNonEmptyString(item.TargetBranch, item.Base.Ref)
+	link := firstNonEmptyString(item.WebURL, item.HTMLURL)
+
+	if target == "" || link == "" {
+		return "", errInvalidMRList
+	}
+
+	if target != m.Target {
+		return "", fmt.Errorf("%s: %w %s (%s), expected %s", m.Branch, errMRTargetConflict, target, link, m.Target)
+	}
+
+	return link, nil
+}
+
+func matchingRequest(out string, m *mergeRequest) (string, error) {
+	var existing string
+
+	sawPage := false
+
+	// gh emits one JSON array per page. glab can combine them into one.
+	decoder := json.NewDecoder(strings.NewReader(out))
+
+	for {
+		var page []openRequest
+
+		if err := decoder.Decode(&page); err != nil {
+			if errors.Is(err, io.EOF) && sawPage {
+				return existing, nil
+			}
+
+			return "", fmt.Errorf("parse open requests: %w", err)
+		}
+
+		if page == nil {
+			return "", errInvalidMRList
+		}
+
+		sawPage = true
+
+		for _, item := range page {
+			link, err := item.urlFor(m)
+			if err != nil {
+				return "", err
+			}
+
+			if link != "" {
+				existing = link
+			}
+		}
+	}
 }
 
 // lastLine is the last non-empty line of a CLI's output: where glab and gh
@@ -409,6 +529,10 @@ func dependsOn(rctx *run.Ctx, consumer, p *config.Project) bool {
 
 	paths, _ := r.SubmodulePathsAt(ref)
 	for _, path := range paths {
+		if slices.Contains(consumer.IgnoreSubmodules, path) {
+			continue
+		}
+
 		if url, err := r.SubmoduleURLAt(ref, path); err == nil && config.SameRemote(url, p.Git) {
 			return true
 		}
@@ -499,7 +623,7 @@ const (
 // waitMerged polls the request at url until it is merged, then settles for
 // the configured pause. A closed request and the deadline are errors: the
 // next project would pull a dev branch without the change.
-func waitMerged(rctx *run.Ctx, r gitx.Repo, p *config.Project, url string, needs []string) error {
+func waitMerged(rctx *run.Ctx, r gitx.Repo, p *config.Project, url, target string, needs []string) (string, error) {
 	settings := rctx.Cfg.MergeRequest
 	deadline := time.Now().Add(settings.WaitFor())
 
@@ -510,9 +634,9 @@ func waitMerged(rctx *run.Ctx, r gitx.Repo, p *config.Project, url string, needs
 	})
 
 	for {
-		state, err := mrQuery(r, p, url)
+		state, landed, err := mrQuery(r, p, url, target)
 		if err != nil {
-			return fmt.Errorf("merge request %s: %w", url, err)
+			return "", fmt.Errorf("merge request %s: %w", url, err)
 		}
 
 		switch state {
@@ -524,14 +648,14 @@ func waitMerged(rctx *run.Ctx, r gitx.Repo, p *config.Project, url string, needs
 				time.Sleep(settle)
 			}
 
-			return nil
+			return landed, nil
 		case mrClosed:
-			return fmt.Errorf("%w: %s", errMRClosed, url)
+			return "", fmt.Errorf("%w: %s", errMRClosed, url)
 		case mrOpen:
 		}
 
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%w after %s: %s", errMRNotMerged, settings.WaitFor(), url)
+			return "", fmt.Errorf("%w after %s: %s", errMRNotMerged, settings.WaitFor(), url)
 		}
 
 		time.Sleep(rctx.Cfg.CIPoll())
@@ -540,20 +664,53 @@ func waitMerged(rctx *run.Ctx, r gitx.Repo, p *config.Project, url string, needs
 
 // refreshMergedBranch makes the merged change visible to commands that read
 // this project's working copy after --wait-merge, such as deps check.
-func refreshMergedBranch(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch string) error {
+func refreshMergedBranch(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, landed string) error {
 	if !rctx.WantFetchFor(p, true) {
 		return errWaitMergeFetch
 	}
 
-	if err := fetch(rctx, p, r); err != nil {
+	// The clone may only track its dev branch in remote.origin.fetch.
+	refspec := "+refs/heads/" + branch + ":refs/remotes/origin/" + branch
+	if err := remoteGit(rctx, r, "fetch", "origin", refspec); err != nil {
 		return fetchFailed(err)
 	}
 
-	if err := checkoutTracking(r, branch); err != nil {
+	// The target may advance again or be rewound after the host reports
+	// the merge. A descendant contains the change even if its tip differs.
+	if _, err := r.Git("merge-base", "--is-ancestor", "--", landed, "refs/remotes/origin/"+branch); err != nil {
+		return fmt.Errorf("cannot confirm merged commit %s on origin/%s: %w", landed, branch, err)
+	}
+
+	// CI and the human merge can take long enough for the operator to start
+	// other work. Only fast-forward the checkout that the command left behind.
+	current, err := r.CurrentBranch()
+	if err != nil {
+		return err
+	}
+
+	if current != branch {
+		return fmt.Errorf("%w: expected %s, found %s", errMRCheckoutChanged, branch, current)
+	}
+
+	status, err := r.Git("status", "--porcelain", "--ignore-submodules=none")
+	if err != nil {
+		return err
+	}
+
+	if status != "" {
+		return fmt.Errorf("update %s after merge: %w\n%s", branch, errDirty, status)
+	}
+
+	pins, err := changedSubmodulePins(r, "origin/"+branch, nil)
+	if err != nil {
+		return err
+	}
+
+	if err := checkoutWithoutRemovedPins(r, branch, pins.removed); err != nil {
 		return fmt.Errorf("update %s after merge: %w", branch, err)
 	}
 
-	if _, err := r.Git("submodule", "update", "--recursive"); err != nil {
+	if _, err := r.Git("submodule", "update", "--checkout", "--recursive"); err != nil {
 		return fmt.Errorf("update submodules after merge: %w", err)
 	}
 
@@ -562,7 +719,7 @@ func refreshMergedBranch(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch s
 
 // mrQuery asks the project's CLI for the request's state. GitLab is asked by
 // the iid at the end of the URL, GitHub by the URL itself.
-func mrQuery(r gitx.Repo, p *config.Project, url string) (mrState, error) {
+func mrQuery(r gitx.Repo, p *config.Project, url, target string) (mrState, string, error) {
 	var (
 		out string
 		err error
@@ -570,33 +727,45 @@ func mrQuery(r gitx.Repo, p *config.Project, url string) (mrState, error) {
 
 	switch p.CI {
 	case config.CIGitLab:
-		out, err = r.Output("glab", "api", "projects/:id/merge_requests/"+lastSegment(url))
+		out, err = r.Stdout("glab", "api", "projects/:id/merge_requests/"+lastSegment(url))
 	case config.CIGitHub:
-		out, err = r.Output("gh", "pr", "view", url, "--json", "state")
+		out, err = r.Stdout("gh", "pr", "view", url, "--json", "state,baseRefName,mergeCommit")
 	default:
-		return mrOpen, fmt.Errorf("%w %q", errUnknownCI, p.CI)
+		return mrOpen, "", fmt.Errorf("%w %q", errUnknownCI, p.CI)
 	}
 
 	if err != nil {
-		return mrOpen, err
+		return mrOpen, "", err
 	}
 
 	var answer struct {
-		State string `json:"state"`
+		State       string `json:"state"`
+		MergeSHA    string `json:"merge_commit_sha"`  //nolint:tagliatelle // GitLab field
+		SquashSHA   string `json:"squash_commit_sha"` //nolint:tagliatelle // GitLab field
+		SHA         string `json:"sha"`
+		MergeCommit struct {
+			OID string `json:"oid"`
+		} `json:"mergeCommit"`
+		TargetBranch string `json:"target_branch"` //nolint:tagliatelle // GitLab field
+		BaseRefName  string `json:"baseRefName"`
 	}
 
 	if err := json.Unmarshal([]byte(out), &answer); err != nil {
-		return mrOpen, fmt.Errorf("parse the state: %w", err)
+		return mrOpen, "", fmt.Errorf("parse the state: %w", err)
+	}
+
+	if actual := firstNonEmptyString(answer.TargetBranch, answer.BaseRefName); actual != target {
+		return mrOpen, "", fmt.Errorf("%w %q, expected %q", errMRTargetConflict, actual, target)
 	}
 
 	// GitLab: opened, merged, closed, locked. GitHub: OPEN, MERGED, CLOSED.
 	switch strings.ToLower(answer.State) {
 	case "merged":
-		return mrMerged, nil
+		return mrMerged, firstNonEmptyString(answer.MergeSHA, answer.MergeCommit.OID, answer.SquashSHA, answer.SHA), nil
 	case "closed":
-		return mrClosed, nil
+		return mrClosed, "", nil
 	default:
-		return mrOpen, nil
+		return mrOpen, "", nil
 	}
 }
 

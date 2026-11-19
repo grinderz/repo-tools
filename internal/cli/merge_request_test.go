@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -27,19 +28,32 @@ echo "$*" >> "$GLAB_LOG"
 case "$1 $2" in
   "api projects/:id/merge_requests/"*)
     state=opened; [ -f "$GLAB_LOG.state" ] && state=$(cat "$GLAB_LOG.state")
+    target=develop; [ -f "$GLAB_LOG.target" ] && target=$(cat "$GLAB_LOG.target")
+    target=${GLAB_RETARGET:-$target}
+    merged=
     if [ "${GLAB_AUTO_MERGE:-}" = 1 ]; then
       source=$(cat "$GLAB_LOG.source")
-      target=$(cat "$GLAB_LOG.target")
-      git push origin "$source:$target" >/dev/null 2>&1 || exit 1
+      merged=$(git rev-parse "$source") || exit 1
+      if [ "${GLAB_SQUASH:-}" = 1 ]; then
+        merged=$(git commit-tree "$source^{tree}" -p "$target" -m squash) || exit 1
+      fi
+      git push origin "$merged:refs/heads/$target" >/dev/null 2>&1 || exit 1
+      if [ "${GLAB_REWIND:-}" = 1 ]; then
+        git push --force origin "$target:refs/heads/$target" >/dev/null 2>&1 || exit 1
+      fi
       state=merged
     fi
-    echo "{\"state\":\"$state\"}" ;;
+    printf '{"state":"%s","target_branch":"%s","merge_commit_sha":"%s"}\n' "$state" "$target" "$merged" ;;
   "api projects/:id/merge_requests"*)
-    if [ -f "$GLAB_LOG.mr" ]; then echo '[{"web_url":"https://gl/mr/1"}]'; else echo '[]'; fi ;;
+    if [ -f "$GLAB_LOG.mr" ]; then
+      printf '[{"web_url":"https://gl/mr/1","target_branch":"%s","source_project_id":1,"target_project_id":1}]\n' \
+        "$(cat "$GLAB_LOG.target")"
+    else echo '[]'; fi ;;
   "mr create")
     printf '%s\n' "$4" > "$GLAB_LOG.source"
     printf '%s\n' "$6" > "$GLAB_LOG.target"
-    touch "$GLAB_LOG.mr"; echo "Creating merge request for $4 into $6"; echo "https://gl/mr/1" ;;
+    touch "$GLAB_LOG.mr"; echo "Creating merge request for $4 into $6"; echo "https://gl/mr/1"
+    echo "A new version of glab is available" >&2 ;;
   "api projects/:id/pipelines?"*)
     # no pipeline on the branch, one on the merge request
     case "$2" in
@@ -188,11 +202,183 @@ func TestCommitAndPushOpensAMergeRequest(t *testing.T) {
 	}
 }
 
+func TestMatchingRequestChecksLaterPagesAndSkipsForks(t *testing.T) {
+	t.Parallel()
+
+	request := &mergeRequest{Branch: "shared", Target: "release"}
+	fork := `[{"web_url":"fork","target_branch":"dev","source_project_id":2,"target_project_id":1}]`
+	local := `[{"web_url":"local","target_branch":"release","source_project_id":1,"target_project_id":1}]`
+
+	if got, err := matchingRequest(fork+"\n"+local, request); err != nil || got != "local" {
+		t.Errorf("GitLab lookup = %q, %v", got, err)
+	}
+
+	local = `[{"html_url":"pr","base":{"ref":"release","repo":{"id":1}},"head":{"repo":{"id":1}}}]`
+	fork = `[{"html_url":"fork","base":{"ref":"dev","repo":{"id":1}},"head":{"repo":{"id":2}}}]`
+
+	if got, err := matchingRequest(fork+"\n"+local, request); err != nil || got != "pr" {
+		t.Errorf("GitHub lookup = %q, %v", got, err)
+	}
+
+	conflict := strings.Replace(local, "release", "other", 1)
+	if _, err := matchingRequest(local+"\n"+conflict, request); !errors.Is(err, errMRTargetConflict) {
+		t.Errorf("second open PR into a different base: %v", err)
+	}
+
+	for _, broken := range []string{"", "]", "[]]", "null"} {
+		if _, err := matchingRequest(broken, request); err == nil {
+			t.Errorf("invalid request list %q treated as an empty result", broken)
+		}
+	}
+}
+
+func TestMRBranchCannotOverwriteTarget(t *testing.T) {
+	fakeGlab(t)
+	t.Setenv("GLAB_AUTO_MERGE", "1")
+	f, rctx, p := mrFixture(t)
+	p.MRBranch = "{branch}"
+	before := git(t, f.parent, "rev-parse", "origin/develop")
+	writeFile(t, f.parent, "app.txt", "bump\n")
+
+	err := commitAndPush(rctx, repoOf(p), p, cmdDepsFreeze, "develop", "freeze", "nothing", true)
+
+	if got := git(t, f.parent, "rev-parse", "origin/develop"); got != before {
+		t.Fatalf("MR mode pushed directly to develop: %s", got)
+	}
+
+	if err == nil {
+		t.Fatal("expected identical MR branches to fail")
+	}
+}
+
+//nolint:paralleltest // fakeGlab sets PATH
+func TestMRSourceCannotBeAnotherProjectBranch(t *testing.T) {
+	for _, branches := range [][2]string{{"develop", "release-1.0"}, {"release-1.0", "develop"}} {
+		fakeGlab(t)
+
+		source, target := branches[0], branches[1]
+		f, rctx, p := mrFixture(t)
+		p.MRBranch = source
+
+		git(t, f.parent, "checkout", "--recurse-submodules", target)
+		writeFile(t, f.parent, "app.txt", "bump\n")
+
+		before := git(t, f.parent, "rev-parse", "origin/"+source)
+		err := commitAndPush(rctx, repoOf(p), p, cmdDepsFreeze, target, "bump", "nothing", false)
+
+		if got := git(t, f.parent, "rev-parse", "origin/"+source); got != before || err == nil {
+			t.Errorf("MR from %s into %s: source was %s, now %s, error %v", source, target, before, got, err)
+		}
+	}
+}
+
+//nolint:paralleltest // fakeGlab sets PATH
+func TestMRRerunCannotRewriteRequestIntoAnotherTarget(t *testing.T) {
+	fakeGlab(t)
+	f, rctx, p := mrFixture(t)
+	p.MRBranch = "rt/shared"
+
+	writeFile(t, f.parent, "app.txt", "first bump\n")
+
+	if err := commitAndPush(rctx, repoOf(p), p, cmdDepsFreeze, "develop", "first", "nothing", false); err != nil {
+		t.Fatal(err)
+	}
+
+	before := git(t, f.parent, "rev-parse", "origin/rt/shared")
+	git(t, f.parent, "checkout", "--recurse-submodules", "release-1.0")
+	writeFile(t, f.parent, "app.txt", "second bump\n")
+
+	err := commitAndPush(rctx, repoOf(p), p, cmdDepsFreeze, "release-1.0", "second", "nothing", false)
+
+	if got := git(t, f.parent, "rev-parse", "origin/rt/shared"); got != before {
+		t.Fatalf("rerun rewrote the source of the open MR into develop: %s", got)
+	}
+
+	if err == nil {
+		t.Fatal("expected the conflicting target to fail")
+	}
+}
+
+//nolint:paralleltest // fakeGlab sets PATH
+func TestMRRerunPreservesRetainedSource(t *testing.T) {
+	t.Run("single-branch", func(t *testing.T) { checkMRRerun(t, true) })
+	t.Run("all-branches", func(t *testing.T) { checkMRRerun(t, false) })
+}
+
+func checkMRRerun(t *testing.T, singleBranch bool) {
+	t.Helper()
+
+	log := fakeGlab(t)
+	f, rctx, p := mrFixture(t)
+	rctx.FetchFlag = nil
+	p.MRBranch = "rt/shared"
+
+	if singleBranch {
+		git(t, f.parent, "config", "remote.origin.fetch", "+refs/heads/develop:refs/remotes/origin/develop")
+	}
+
+	for _, change := range []string{"first", "second"} {
+		writeFile(t, f.parent, "app.txt", change+"\n")
+
+		err := commitAndPush(rctx, repoOf(p), p, cmdDepsFreeze, "develop", change, "nothing", false)
+		if err != nil {
+			t.Fatalf("%s bump: %v", change, err)
+		}
+	}
+
+	origin := git(t, f.parent, "remote", "get-url", "origin")
+	if got := git(t, origin, "show", "rt/shared:app.txt"); got != "second" {
+		t.Errorf("rerun source contains %q", got)
+	}
+
+	// Hosts can retain or delete the source when the previous request closes.
+	for _, keep := range []bool{true, false} {
+		if err := os.Remove(log + ".mr"); err != nil {
+			t.Fatal(err)
+		}
+
+		change := "reuse retained source"
+
+		if !keep {
+			git(t, origin, "update-ref", "-d", "refs/heads/rt/shared")
+
+			git(t, f.parent, "fetch", "--prune", "origin")
+
+			change = "recreate deleted source"
+		}
+
+		writeFile(t, f.parent, "app.txt", change+"\n")
+
+		if err := commitAndPush(rctx, repoOf(p), p, cmdDepsFreeze, "develop", change, "nothing", false); err != nil {
+			t.Fatalf("%s: %v", change, err)
+		}
+
+		if got := git(t, origin, "show", "rt/shared:app.txt"); got != change {
+			t.Errorf("remote content = %q, want %q", got, change)
+		}
+	}
+
+	if err := os.Remove(log + ".mr"); err != nil {
+		t.Fatal(err)
+	}
+
+	other := git(t, origin, "rev-parse", "release-1.0")
+	git(t, origin, "update-ref", "refs/heads/rt/shared", other)
+	git(t, f.parent, "fetch", "--prune", "origin")
+	writeFile(t, f.parent, "app.txt", "another bump\n")
+
+	err := commitAndPush(rctx, repoOf(p), p, cmdDepsFreeze, "develop", "another bump", "nothing", false)
+	if !errors.Is(err, errMRSourceChanged) || git(t, origin, "rev-parse", "rt/shared") != other {
+		t.Errorf("remote source changed outside the run: %v", err)
+	}
+}
+
 // --wait-merge holds the command even without later dependent projects, then
 // refreshes the target checkout for the next flow step's working-copy checks.
 func TestCommitAndPushWaitMergeRefreshesTarget(t *testing.T) {
 	log := fakeGlab(t)
 	t.Setenv("GLAB_AUTO_MERGE", "1")
+	t.Setenv("GLAB_SQUASH", "1")
 
 	f, rctx, p := mrFixture(t)
 	rctx.FetchFlag = nil
@@ -202,6 +388,7 @@ func TestCommitAndPushWaitMergeRefreshesTarget(t *testing.T) {
 	writeFile(t, f.sub, "lib.txt", "v3\n")
 	newPin := commit(t, f.sub, "sub: next develop change")
 	git(t, f.parent, "submodule", "update", "--remote", "--", "sub")
+	git(t, f.parent, "config", "submodule.sub.update", "none")
 	writeFile(t, f.parent, "app.txt", "merged bump\n")
 
 	var err error
@@ -240,6 +427,148 @@ func TestCommitAndPushWaitMergeRefreshesTarget(t *testing.T) {
 	}
 }
 
+func TestWaitMergeDetectsRewoundTarget(t *testing.T) {
+	fakeGlab(t)
+	t.Setenv("GLAB_AUTO_MERGE", "1")
+	t.Setenv("GLAB_REWIND", "1")
+
+	f, rctx, p := mrFixture(t)
+	rctx.FetchFlag = nil
+
+	writeFile(t, f.parent, "app.txt", "must land before the next step\n")
+
+	err := commitAndPush(rctx, repoOf(p), p, cmdDepsFreeze, "develop", "freeze", "nothing", true)
+	if err == nil {
+		t.Fatal("wait succeeded after origin/develop lost the merged commit")
+	}
+}
+
+func TestRefreshMergedBranchReadsTheRecordedPin(t *testing.T) {
+	t.Parallel()
+
+	f, rctx, p := mrFixture(t)
+	rctx.FetchFlag = nil
+
+	git(t, f.parent, "checkout", "-b", "merged-bump")
+	git(t, filepath.Join(f.parent, "sub"), "checkout", f.subRelease)
+	landed := commit(t, f.parent, "bump the pin")
+	writeFile(t, f.parent, "later.txt", "another change after the merge\n")
+	commit(t, f.parent, "advance target")
+	git(t, f.parent, "push", "origin", "HEAD:develop")
+	git(t, f.parent, "checkout", "--recurse-submodules", "develop")
+	git(t, f.parent, "config", "submodule.sub.update", "none")
+
+	if err := refreshMergedBranch(rctx, repoOf(p), p, "develop", landed); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := subPin(t, f.parent); got != f.subRelease {
+		t.Errorf("checkout after merge = %s, want %s", got, f.subRelease)
+	}
+}
+
+func TestRefreshMergedBranchRemovesObsoleteSubmodule(t *testing.T) {
+	t.Parallel()
+
+	f, rctx, p := mrFixture(t)
+	rctx.FetchFlag = nil
+
+	git(t, f.parent, "checkout", "-b", "remove-submodule")
+	git(t, f.parent, "rm", "sub")
+	landed := commit(t, f.parent, "drop submodule")
+	git(t, f.parent, "push", "origin", "HEAD:develop")
+	git(t, f.parent, "checkout", "--recurse-submodules", "develop")
+
+	if err := refreshMergedBranch(rctx, repoOf(p), p, "develop", landed); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := git(t, f.parent, "status", "--porcelain"); got != "" {
+		t.Errorf("refresh left an obsolete worktree: %s", got)
+	}
+}
+
+func TestRefreshMergedBranchPreservesWorkStartedDuringWait(t *testing.T) {
+	t.Parallel()
+
+	f, rctx, p := mrFixture(t)
+	rctx.FetchFlag = nil
+
+	git(t, f.parent, "checkout", "-b", "operator-work")
+	landed := git(t, f.parent, "rev-parse", "origin/develop")
+
+	if err := refreshMergedBranch(rctx, repoOf(p), p, "develop", landed); !errors.Is(err, errMRCheckoutChanged) {
+		t.Fatalf("refresh on another branch: %v", err)
+	}
+
+	if got := git(t, f.parent, "branch", "--show-current"); got != "operator-work" {
+		t.Fatalf("refresh switched to %s", got)
+	}
+
+	git(t, f.parent, "checkout", "develop")
+	git(t, filepath.Join(f.parent, "sub"), "checkout", f.subRelease)
+	git(t, f.parent, "config", "submodule.sub.ignore", "all")
+
+	if err := refreshMergedBranch(rctx, repoOf(p), p, "develop", landed); !errors.Is(err, errDirty) {
+		t.Fatalf("refresh with a local pin: %v", err)
+	}
+
+	if got := subPin(t, f.parent); got != f.subRelease {
+		t.Errorf("refresh replaced the operator's pin with %s", got)
+	}
+}
+
+func TestGitHubWaitUsesMatchingSourceAndTarget(t *testing.T) {
+	dir := t.TempDir()
+	script := `#!/bin/sh
+echo "CLI update available" >&2
+case "$1" in
+  api)
+    [ "$2" = 'repos/{owner}/{repo}/pulls?state=open&head={owner}:rt%2Fa%2Bb%26c' ] && [ "$3" = --paginate ] || exit 1
+    echo '[{"html_url":"pr","base":{"ref":"develop","repo":{"id":1}},"head":{"repo":{"id":1}}}]' ;;
+  pr)
+    [ "$2 $3 $4 $5" = "view pr --json state,baseRefName,mergeCommit" ] || exit 1
+    echo '{"state":"MERGED","baseRefName":"integration"}' ;;
+  *) exit 1 ;;
+esac
+`
+
+	if err := os.WriteFile(filepath.Join(dir, "gh"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	p := &config.Project{CI: config.CIGitHub}
+	r := gitx.Repo{Dir: dir}
+	m := &mergeRequest{Branch: "rt/a+b&c", Target: "develop"}
+
+	link, err := existingMergeRequest(r, p, m)
+	if err != nil || link != "pr" {
+		t.Fatalf("open PR lookup = %q, %v", link, err)
+	}
+
+	if _, _, err := mrQuery(r, p, link, m.Target); !errors.Is(err, errMRTargetConflict) {
+		t.Errorf("retargeted GitHub PR: %v", err)
+	}
+}
+
+func TestWaitMergeRejectsRetargetedRequest(t *testing.T) {
+	fakeGlab(t)
+	t.Setenv("GLAB_AUTO_MERGE", "1")
+	t.Setenv("GLAB_RETARGET", "integration")
+
+	f, rctx, p := mrFixture(t)
+	rctx.FetchFlag = nil
+
+	writeFile(t, f.parent, "app.txt", "merge into develop\n")
+
+	err := commitAndPush(rctx, repoOf(p), p, cmdDepsSubmodules, "develop", "bump", "nothing", true)
+	if err == nil || !strings.Contains(err.Error(), "integration") {
+		t.Fatalf("MR landed on integration while waiting for develop: %v", err)
+	}
+}
+
 // The freeze step uses the same wait as deps submodules: the next step must
 // see the merged release commit and the submodule pin it records.
 func TestFreezeDepsWaitMergeRefreshesRelease(t *testing.T) {
@@ -250,6 +579,9 @@ func TestFreezeDepsWaitMergeRefreshesRelease(t *testing.T) {
 	on := true
 	p.DepsFreeze = &on
 	p.Submodules = []config.Submodule{{Path: "sub", FreezeTo: "release-1.0"}}
+	// The clone's default fetch does not refresh origin/release-1.0.
+	git(t, f.parent, "config", "remote.origin.fetch", "+refs/heads/develop:refs/remotes/origin/develop")
+
 	rctx.FetchFlag = nil
 	rctx.Cfg.MergeRequest.Wait = config.MRWaitNone
 
@@ -436,6 +768,20 @@ func TestMRDependentsLookAheadInTheRun(t *testing.T) {
 		t.Errorf("lib's dependents = %v, want parent and gomod", got)
 	}
 
+	parent.IgnoreSubmodules = []string{"sub"}
+
+	if got := mrDependents(rctx, lib); strings.Join(got, ",") != "gomod" {
+		t.Errorf("lib's dependents with the parent's submodule ignored = %v, want gomod", got)
+	}
+
+	parent.Deps = "go"
+	writeFile(t, f.parent, "Makefile", "GO_DEPS_UPDATE_INTERNAL := "+f.sub+"@develop\n")
+	commit(t, f.parent, "parent: pin the library as a module too")
+
+	if !dependsOn(rctx, parent, lib) {
+		t.Error("a module pin still depends on lib when its submodule is ignored")
+	}
+
 	if got := mrDependents(rctx, parent); len(got) != 0 {
 		t.Errorf("nothing depends on parent, got %v", got)
 	}
@@ -488,7 +834,7 @@ func TestWaitMergedPollsUntilMerged(t *testing.T) {
 	started := time.Now()
 
 	out := captureOutput(t, func() {
-		err = waitMerged(rctx, r, p, "https://gl/mr/7", []string{"api"})
+		_, err = waitMerged(rctx, r, p, "https://gl/mr/7", "develop", []string{"api"})
 	})
 	if err != nil {
 		t.Fatalf("wait: %v", err)
@@ -516,7 +862,7 @@ func TestWaitMergedPollsUntilMerged(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	captureOutput(t, func() { err = waitMerged(rctx, r, p, "https://gl/mr/7", []string{"api"}) })
+	captureOutput(t, func() { _, err = waitMerged(rctx, r, p, "https://gl/mr/7", "develop", []string{"api"}) })
 
 	if err == nil || !strings.Contains(err.Error(), "closed without being merged") {
 		t.Errorf("a closed request must fail the wait, got %v", err)

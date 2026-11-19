@@ -195,7 +195,7 @@ func TestSubmoduleAttributes(t *testing.T) {
 	r := repoWithCommit(t)
 
 	gitmodules := "" +
-		"[submodule \"lib\"]\n\tpath = vendor/lib\n\turl = git@example.com:lib.git\n\tbranch = develop\n" +
+		"[submodule \"shared lib\"]\n\tpath = vendor/shared [lib]\n\turl = git@example.com:lib.git\n\tbranch = develop\n" +
 		"[submodule \"tools\"]\n\tpath = .tools\n\turl = git@example.com:tools.git\n"
 
 	if err := os.WriteFile(filepath.Join(r.Dir, ".gitmodules"), []byte(gitmodules), 0o644); err != nil {
@@ -207,16 +207,24 @@ func TestSubmoduleAttributes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(paths) != 2 || paths[0] != ".tools" || paths[1] != "vendor/lib" {
+	if len(paths) != 2 || paths[0] != ".tools" || paths[1] != "vendor/shared [lib]" {
 		t.Errorf("got %v, want both paths sorted", paths)
 	}
 
-	name, err := r.SubmoduleNameByPath("vendor/lib")
-	if err != nil || name != "lib" {
+	name, err := r.SubmoduleNameByPath("vendor/shared [lib]")
+	if err != nil || name != "shared lib" {
 		t.Errorf("name = %q, err = %v", name, err)
 	}
 
-	branch, err := r.SubmoduleBranch("vendor/lib")
+	run(t, r.Dir, "add", ".gitmodules")
+	run(t, r.Dir, "commit", "--quiet", "-m", "record submodule declarations")
+
+	url, err := r.SubmoduleURLAt("HEAD", "vendor/shared [lib]")
+	if err != nil || url != "git@example.com:lib.git" {
+		t.Errorf("committed URL = %q, err = %v", url, err)
+	}
+
+	branch, err := r.SubmoduleBranch("vendor/shared [lib]")
 	if err != nil || branch != "develop" {
 		t.Errorf("branch = %q, err = %v", branch, err)
 	}
@@ -227,9 +235,22 @@ func TestSubmoduleAttributes(t *testing.T) {
 		t.Errorf("missing branch should be empty, got %q, err %v", branch, err)
 	}
 
-	url, err := r.SubmoduleURL(".tools")
+	url, err = r.SubmoduleURL(".tools")
 	if err != nil || url != "git@example.com:tools.git" {
 		t.Errorf("url = %q, err = %v", url, err)
+	}
+}
+
+func TestSubmodulePathsReportMalformedGitmodules(t *testing.T) {
+	t.Parallel()
+
+	r := repoWithCommit(t)
+	if err := os.WriteFile(filepath.Join(r.Dir, ".gitmodules"), []byte("[broken\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if paths, err := r.SubmodulePaths(); err == nil {
+		t.Errorf("malformed .gitmodules returned paths %v without an error", paths)
 	}
 }
 

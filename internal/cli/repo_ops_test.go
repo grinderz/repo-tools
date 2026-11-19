@@ -565,6 +565,13 @@ func TestPlanFreezeDepsWarnsAboutTheReleaseBranchSubmodules(t *testing.T) {
 	if err != nil || !strings.Contains(step.Warn, "none are configured for freeze") {
 		t.Errorf("the submodule on release-1.0 is unconfigured: %q (err %v)", step.Warn, err)
 	}
+
+	p.IgnoreSubmodules = []string{"sub"}
+
+	step, err = planFreezeDeps(testCtx(), p, "release-1.0", false, false, false)
+	if err != nil || step.Warn != "" {
+		t.Errorf("only ignored submodules on release-1.0: %q (err %v)", step.Warn, err)
+	}
 }
 
 // The freeze plan describes the release branch, so it must read that branch's

@@ -306,8 +306,11 @@ usually mentions people. And
 `mr_reviewers` on a project replace the lists, `mr_branch` the branch
 template: a public repository's branches need not carry the work ticket). A rerun on the same day
 rewrites the branch with one
-fresh commit and updates the request already open for it rather than opening
-a second one. The diff review shows the request with the message and asks
+fresh commit and updates the request already open for it. Use a dedicated
+source branch for each target. The command rejects a source that names the
+target, the project's dev branch, or a release branch. If an open request
+already uses the source for a different target, the run stops before the push.
+The diff review shows the request with the message and asks
 once, `Commit, push and open MR into develop?`; a decline leaves the changes
 staged as usual. Afterwards the working copy is back on the target branch,
 submodules on its pins, and the local branch is what `repo prune` deletes once
@@ -322,9 +325,10 @@ for <url> to be merged (needed by api, worker)` — and goes on to the next
 project when it lands; the operator merges in the browser, rt notices.
 `merge_request.wait` says when: `dependents` (the default) only when a project
 still to come in the run depends on this one — carries its url in
-`.gitmodules` on the target branch, or lists its module in the `deps_pins`
-variable — `always`, or `none`. A request closed without a merge fails the
-step, and so does `wait_minutes` (60 by default) running out.
+`.gitmodules` on the target branch at a path outside `ignore_submodules`,
+or lists its module in the `deps_pins` variable — `always`, or `none`.
+A request closed without a merge fails the step, as does reaching
+`wait_minutes` (60 by default).
 `settle_seconds` adds a pause after the merge for what the merge sets in
 motion — a package build, a registry — to land before the next project pulls
 it. The plan says all of it: `then wait for the MR to be merged (needed by
@@ -388,6 +392,10 @@ submodules intentionally kept at their pinned commits. Ignored paths are also
 excluded from automatic derivation, even when their remote is another project
 in the config. A path cannot be both frozen and ignored; `repo check` reports
 ignored paths absent from `.gitmodules` on the release branch.
+When a branch switch or fast-forward changes an ignored pin, `deps freeze`
+and `deps submodules` update its checkout before running dependency commands.
+If that submodule has local changes, the command stops before switching branches,
+including with `--allow-dirty`.
 
 **One config per release.** A project may name the release branch it works
 with:
@@ -1020,6 +1028,10 @@ rt deps submodules --wait-merge             # wait for its MR, then refresh the 
 `merge_request.wait: dependents` finds no later dependent project. After the
 merge it fetches and fast-forwards the target branch, then updates its checked
 out submodules, so the next step (such as `deps check`) reads the merged state.
+The wait stops with an error if the request is retargeted to another branch
+or the fetched target no longer contains the merged commit.
+If you switch branches or make local changes during the wait, the refresh stops
+and reports which checkout or changes it found.
 With no changes to commit, there is no MR to wait for. The flag needs MR mode
 and fetching; it cannot be combined with `--no-commit`, `--no-mr`, or
 `--no-fetch`.

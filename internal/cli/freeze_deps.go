@@ -144,7 +144,8 @@ func planFreezeDeps(
 	// Both halves judge the branch being frozen, not the current checkout: a
 	// release branch may carry no submodules at all while the dev branch does.
 	if frozen, _ := freezeList(rctx, r, p, ref); len(frozen) == 0 {
-		if paths, _ := r.SubmodulePathsAt(ref); len(paths) > 0 {
+		paths, _ := r.SubmodulePathsAt(ref)
+		if slices.ContainsFunc(paths, func(path string) bool { return !slices.Contains(p.IgnoreSubmodules, path) }) {
 			st.Warn = "project has submodules but none are configured for freeze"
 		}
 	}
@@ -350,7 +351,7 @@ func freezeDeps(rctx *run.Ctx, p *config.Project, branch string, noDeps, allowDi
 		return err
 	}
 
-	if err := checkoutTracking(r, branch); err != nil {
+	if err := checkoutDepsBranch(r, branch, p.IgnoreSubmodules); err != nil {
 		return err
 	}
 
@@ -511,12 +512,13 @@ func commitAndWaitForMerge(
 		return nil
 	}
 
-	if err := waitMerged(rctx, r, p, url, needs); err != nil {
+	landed, err := waitMerged(rctx, r, p, url, branch, needs)
+	if err != nil {
 		return err
 	}
 
 	if waitMerge {
-		return refreshMergedBranch(rctx, r, p, branch)
+		return refreshMergedBranch(rctx, r, p, branch, firstNonEmptyString(landed, sha))
 	}
 
 	return nil

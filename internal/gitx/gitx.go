@@ -426,15 +426,22 @@ func (r Repo) gitmodulesAt(ref, attr string) (map[string]string, error) {
 
 	// git config exits 1 when the pattern matches nothing, which is not an
 	// error here: a submodule simply may not set the attribute.
-	out, _ := r.Git("config", "-f", file, "--get-regexp", `^submodule\..*\.`+attr+`$`)
-
 	values := map[string]string{}
-	if out == "" {
-		return values, nil
+
+	out, err := r.Stdout("git", "config", "--null", "-f", file, "--get-regexp", `^submodule\..*\.`+attr+`$`)
+	if err != nil {
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 1 {
+			return values, nil
+		}
+
+		return nil, err
 	}
 
-	for line := range strings.SplitSeq(out, "\n") {
-		key, value, ok := strings.Cut(line, " ")
+	// --null separates the key from the value with LF and terminates the
+	// value with NUL. Spaces in subsection names and paths remain literal.
+	for record := range strings.SplitSeq(out, "\x00") {
+		key, value, ok := strings.Cut(record, "\n")
 		if !ok {
 			continue
 		}

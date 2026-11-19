@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -98,6 +99,168 @@ func TestConfiguredSubmodulesFollowTheConfig(t *testing.T) {
 	targets, _, err = configuredSubmodules(ctxFor(p), r, p, "", nil)
 	if err != nil || len(targets) != 1 || targets[0].Path != "vendor/dash" {
 		t.Errorf("the listed submodule should be the scope: %+v %v", targets, err)
+	}
+}
+
+func TestDepsCommandsKeepIgnoredReleasePin(t *testing.T) {
+	t.Parallel()
+
+	for _, command := range []string{cmdDepsFreeze, cmdDepsSubmodules} {
+		t.Run(command, func(t *testing.T) {
+			t.Parallel()
+
+			f, rctx, p := mrFixture(t)
+			p.MR = config.MRNone
+			p.IgnoreSubmodules = []string{"sub"}
+			p.Deps = "snapshot"
+			rctx.Cfg.Cmds.Deps = map[string][]string{"snapshot": {"cat sub/lib.txt > snapshot.txt"}}
+
+			var err error
+
+			if command == cmdDepsFreeze {
+				err = freezeDeps(rctx, p, "release-1.0", false, false, false)
+			} else {
+				// Give deps submodules one managed dependency alongside the ignored one.
+				git(t, f.parent, "checkout", "--recurse-submodules", "release-1.0")
+				git(t, f.parent, "submodule", "add", "-b", "develop", f.sub, "managed")
+				commit(t, f.parent, "release: add managed dependency")
+				git(t, f.parent, "push", "origin", "release-1.0")
+				git(t, f.parent, "checkout", "--recurse-submodules", "develop")
+
+				p.Submodules = []config.Submodule{{Path: "managed", FreezeTo: "develop"}}
+
+				step, found, planErr := planSubmodules(rctx, p, submodulesOpts{Branch: "release-1.0"})
+				if planErr != nil || found != 1 {
+					t.Fatalf("plan found %d targets: %v", found, planErr)
+				}
+
+				err = step.Exec()
+			}
+
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if pin := git(t, f.parent, "rev-parse", "origin/release-1.0:sub"); pin != f.subRelease {
+				t.Errorf("ignored release pin = %s, want %s", pin, f.subRelease)
+			}
+
+			if got := git(t, f.parent, "show", "origin/release-1.0:snapshot.txt"); got != "v1-hotfix" {
+				t.Errorf("dependency command read %q from the ignored submodule", got)
+			}
+		})
+	}
+}
+
+func TestFreezeLeavesRemovedIgnoredPinOffRelease(t *testing.T) {
+	t.Parallel()
+
+	f, rctx, p := mrFixture(t)
+	p.MR = config.MRNone
+	p.IgnoreSubmodules = []string{"sub"}
+
+	first := git(t, f.parent, "rev-list", "--max-parents=0", "HEAD")
+	git(t, f.parent, "branch", "release-0.9", first)
+	git(t, f.parent, "push", "origin", "release-0.9")
+
+	if err := freezeDeps(rctx, p, "release-0.9", true, false, false); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := git(t, f.parent, "rev-parse", "origin/release-0.9"); got != first {
+		t.Errorf("freeze made a commit on a release with no submodule: %s", got)
+	}
+
+	if got := git(t, f.parent, "status", "--porcelain"); got != "" {
+		t.Errorf("release checkout has leftovers: %s", got)
+	}
+}
+
+func TestRemovedIgnoredPinPreservesLocalFiles(t *testing.T) {
+	t.Parallel()
+
+	f, rctx, p := mrFixture(t)
+	p.IgnoreSubmodules = []string{"sub"}
+	first := git(t, f.parent, "rev-list", "--max-parents=0", "HEAD")
+	git(t, f.parent, "branch", "release-0.9", first)
+
+	sub := filepath.Join(f.parent, "sub")
+	excludes := filepath.Join(t.TempDir(), "exclude")
+	writeFile(t, filepath.Dir(excludes), filepath.Base(excludes), "local.txt\n")
+	git(t, sub, "config", "core.excludesFile", excludes)
+	writeFile(t, sub, "local.txt", "operator's settings\n")
+
+	if err := freezeDeps(rctx, p, "release-0.9", true, false, false); !errors.Is(err, errDirty) {
+		t.Fatalf("expected a local file to stop checkout, got %v", err)
+	}
+
+	if got := git(t, f.parent, "branch", "--show-current"); got != "develop" {
+		t.Errorf("unexpected branch %s", got)
+	}
+
+	if got := git(t, sub, "rev-parse", "HEAD"); got != f.subDevelop {
+		t.Errorf("submodule was left at %s, want %s", got, f.subDevelop)
+	}
+
+	if got, err := os.ReadFile(filepath.Join(sub, "local.txt")); err != nil || string(got) != "operator's settings\n" {
+		t.Errorf("local file after checkout = %q, error %v", got, err)
+	}
+}
+
+func TestRemovedIgnoredPinRestoredAfterCheckoutConflict(t *testing.T) {
+	t.Parallel()
+
+	f, rctx, p := mrFixture(t)
+	rctx.Cfg.Confirm = config.ConfirmDestructive
+	p.IgnoreSubmodules = []string{"sub"}
+
+	git(t, f.parent, "checkout", "-b", "release-2.0")
+	git(t, f.parent, "rm", "sub")
+	writeFile(t, f.parent, "app.txt", "release contents\n")
+	commit(t, f.parent, "release drops submodule")
+	git(t, f.parent, "checkout", "--recurse-submodules", "develop")
+	sub := filepath.Join(f.parent, "sub")
+	git(t, sub, "checkout", "-b", "operator-work")
+	writeFile(t, f.parent, "app.txt", "local edits\n")
+
+	if err := freezeDeps(rctx, p, "release-2.0", true, true, false); err == nil {
+		t.Fatal("expected a checkout conflict")
+	}
+
+	if got := git(t, sub, "rev-parse", "HEAD"); got != f.subDevelop {
+		t.Errorf("failed checkout left submodule at %s, want %s", got, f.subDevelop)
+	}
+
+	if got := git(t, sub, "branch", "--show-current"); got != "operator-work" {
+		t.Errorf("failed checkout left submodule on %q", got)
+	}
+
+	if got := git(t, f.parent, "status", "--porcelain"); got != "M app.txt" {
+		t.Errorf("unexpected changes after checkout conflict: %s", got)
+	}
+}
+
+func TestAllowDirtyPreservesChangesInIgnoredSubmodule(t *testing.T) {
+	t.Parallel()
+
+	f, rctx, p := mrFixture(t)
+	rctx.Cfg.Confirm = config.ConfirmDestructive
+	p.IgnoreSubmodules = []string{"sub"}
+	sub := filepath.Join(f.parent, "sub")
+	writeFile(t, sub, "lib.txt", "operator's edit\n")
+
+	err := freezeDeps(rctx, p, "release-1.0", true, true, false)
+	if !errors.Is(err, errDirty) {
+		t.Fatalf("expected a dirty submodule error before changing branches, got %v", err)
+	}
+
+	if branch := git(t, f.parent, "branch", "--show-current"); branch != "develop" {
+		t.Errorf("branch with local changes = %s, want develop", branch)
+	}
+
+	got, err := os.ReadFile(filepath.Join(sub, "lib.txt"))
+	if err != nil || string(got) != "operator's edit\n" {
+		t.Errorf("local submodule edit = %q, err %v", got, err)
 	}
 }
 
