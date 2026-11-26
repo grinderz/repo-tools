@@ -141,7 +141,7 @@ func TestPlanLinesMentionTheReview(t *testing.T) {
 	p := &config.Project{Name: "api", CI: config.CINone}
 	shown := &run.Ctx{Cfg: &config.Config{}}
 
-	lines := commitPlanLines(
+	lines, err := commitPlanLines(
 		shown,
 		p,
 		cmdChangelogUpdate,
@@ -150,6 +150,10 @@ func TestPlanLinesMentionTheReview(t *testing.T) {
 		"ci/AB-0000: update changelog",
 		false,
 	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if !strings.Contains(lines[0], "diff shown first") {
 		t.Errorf("got %q", lines[0])
 	}
@@ -165,8 +169,12 @@ func TestPlanLinesMentionTheReview(t *testing.T) {
 	off := false
 	quiet := &run.Ctx{Cfg: &config.Config{Diff: &off}}
 
-	got := commitPlanLines(quiet, p, cmdChangelogUpdate, "release-1.0", "files changed", "msg", false)[0]
-	if strings.Contains(got, "diff") {
+	quietLines, err := commitPlanLines(quiet, p, cmdChangelogUpdate, "release-1.0", "files changed", "msg", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got := quietLines[0]; strings.Contains(got, "diff") {
 		t.Errorf("with the review off the line should not mention it: %q", got)
 	}
 

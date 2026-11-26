@@ -239,12 +239,11 @@ func commitToMergeRequest(
 		return "", "", m.BodyErr
 	}
 
-	_, release := gitx.ParseReleaseBranch(m.Branch, p.ReleaseBranchPrefix)
-	if m.Branch == m.Target || m.Branch == p.DevBranch || m.Branch == p.ReleaseBranch || release {
-		return "", "", fmt.Errorf("%s: %w", m.Branch, errMRSourceReserved)
+	if err := reservedSource(p, m); err != nil {
+		return "", "", err
 	}
 
-	lease, err := mrPushLease(rctx, r, p, m)
+	lease, existing, err := mrPushLease(rctx, r, p, m)
 	if err != nil {
 		return "", "", err
 	}
@@ -269,7 +268,7 @@ func commitToMergeRequest(
 		return "", "", err
 	}
 
-	url, err := openMergeRequest(r, p, m)
+	url, err := openMergeRequest(r, p, m, existing)
 	if err != nil {
 		return "", "", err
 	}
@@ -289,12 +288,25 @@ func commitToMergeRequest(
 	return sha, url, nil
 }
 
+// reservedSource refuses a request branch that names a branch the request
+// must never rewrite: -B and the forced push would replace it outright.
+func reservedSource(p *config.Project, m *mergeRequest) error {
+	_, release := gitx.ParseReleaseBranch(m.Branch, p.ReleaseBranchPrefix)
+	if m.Branch == m.Target || m.Branch == p.DevBranch || m.Branch == p.ReleaseBranch || release {
+		return fmt.Errorf("%s: %w", m.Branch, errMRSourceReserved)
+	}
+
+	return nil
+}
+
 // Verify the request's target before rewriting its source. Bind the push to
 // the observed commit even when another fetch runs while the commit is made.
-func mrPushLease(rctx *run.Ctx, r gitx.Repo, p *config.Project, m *mergeRequest) (string, error) {
+// It also returns the URL of the request already open for the source, empty
+// when there is none.
+func mrPushLease(rctx *run.Ctx, r gitx.Repo, p *config.Project, m *mergeRequest) (string, string, error) {
 	existing, err := existingMergeRequest(r, p, m)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	source := "refs/heads/" + m.Branch
@@ -306,16 +318,18 @@ func mrPushLease(rctx *run.Ctx, r gitx.Repo, p *config.Project, m *mergeRequest)
 		expected, err = r.Git("rev-parse", "refs/remotes/origin/"+m.Branch)
 	case rctx.WantFetchFor(p, true) && (existing != "" || r.LocalBranchExists(m.Branch)):
 		// A single-branch clone may only know the source from its previous run.
-		remote, readErr := r.Stdout("git", "ls-remote", "--refs", "origin", source)
+		remote, readErr := retryRemote(rctx, "ls-remote", func() (string, error) {
+			return r.Stdout("git", "ls-remote", "--refs", "origin", source)
+		})
 		if readErr != nil {
-			return "", readErr
+			return "", "", readErr
 		}
 
 		expected, _, _ = strings.Cut(remote, "\t")
 	}
 
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	if expected != "" && existing == "" {
@@ -323,19 +337,19 @@ func mrPushLease(rctx *run.Ctx, r gitx.Repo, p *config.Project, m *mergeRequest)
 		// changes. A tracking ref alone does not identify our previous tip.
 		local, readErr := r.Git("rev-parse", "--verify", source)
 		if readErr != nil || local != expected {
-			return "", fmt.Errorf("%s: %w", m.Branch, errMRSourceChanged)
+			return "", "", fmt.Errorf("%s: %w", m.Branch, errMRSourceChanged)
 		}
 	}
 
-	return "--force-with-lease=" + source + ":" + expected, nil
+	return "--force-with-lease=" + source + ":" + expected, existing, nil
 }
 
-// openMergeRequest opens the request through the project's CLI, or finds the
-// one already open for the branch — a rerun updates the branch, not the
-// request. It returns the request's URL.
-func openMergeRequest(r gitx.Repo, p *config.Project, m *mergeRequest) (string, error) {
-	if existing, err := existingMergeRequest(r, p, m); existing != "" || err != nil {
-		return existing, err
+// openMergeRequest opens the request through the project's CLI, or returns
+// existing, the one mrPushLease found open for the branch — a rerun updates
+// the branch, not the request. It returns the request's URL.
+func openMergeRequest(r gitx.Repo, p *config.Project, m *mergeRequest, existing string) (string, error) {
+	if existing != "" {
+		return existing, nil
 	}
 
 	var (
@@ -675,9 +689,11 @@ func refreshMergedBranch(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, 
 		return fetchFailed(err)
 	}
 
+	remote := "refs/remotes/origin/" + branch
+
 	// The target may advance again or be rewound after the host reports
 	// the merge. A descendant contains the change even if its tip differs.
-	if _, err := r.Git("merge-base", "--is-ancestor", "--", landed, "refs/remotes/origin/"+branch); err != nil {
+	if _, err := r.Git("merge-base", "--is-ancestor", "--", landed, remote); err != nil {
 		return fmt.Errorf("cannot confirm merged commit %s on origin/%s: %w", landed, branch, err)
 	}
 
@@ -692,7 +708,11 @@ func refreshMergedBranch(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, 
 		return fmt.Errorf("%w: expected %s, found %s", errMRCheckoutChanged, branch, current)
 	}
 
-	status, err := r.Git("status", "--porcelain", "--ignore-submodules=none")
+	// submodule update --checkout below disregards submodule.<name>.ignore,
+	// so a moved pin or edited content must show here whatever it says.
+	// Untracked files inside a submodule survive that checkout and do not
+	// stop the refresh: build output a deps command left there, say.
+	status, err := r.Git("status", "--porcelain", "--ignore-submodules=untracked")
 	if err != nil {
 		return err
 	}
@@ -701,7 +721,7 @@ func refreshMergedBranch(rctx *run.Ctx, r gitx.Repo, p *config.Project, branch, 
 		return fmt.Errorf("update %s after merge: %w\n%s", branch, errDirty, status)
 	}
 
-	pins, err := changedSubmodulePins(r, "origin/"+branch, nil)
+	pins, err := changedSubmodulePins(r, remote, nil)
 	if err != nil {
 		return err
 	}

@@ -467,6 +467,34 @@ func TestRefreshMergedBranchReadsTheRecordedPin(t *testing.T) {
 	}
 }
 
+// Build output a deps command left inside a submodule is no local work the
+// refresh could destroy: the submodule checkout keeps untracked files.
+func TestRefreshMergedBranchIgnoresUntrackedSubmoduleFiles(t *testing.T) {
+	t.Parallel()
+
+	f, rctx, p := mrFixture(t)
+	rctx.FetchFlag = nil
+
+	git(t, f.parent, "checkout", "-b", "merged-bump")
+	git(t, filepath.Join(f.parent, "sub"), "checkout", f.subRelease)
+	landed := commit(t, f.parent, "bump the pin")
+	git(t, f.parent, "push", "origin", "HEAD:develop")
+	git(t, f.parent, "checkout", "--recurse-submodules", "develop")
+	writeFile(t, filepath.Join(f.parent, "sub"), "build.out", "artifact\n")
+
+	if err := refreshMergedBranch(rctx, repoOf(p), p, "develop", landed); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := subPin(t, f.parent); got != f.subRelease {
+		t.Errorf("checkout after merge = %s, want %s", got, f.subRelease)
+	}
+
+	if _, err := os.Stat(filepath.Join(f.parent, "sub", "build.out")); err != nil {
+		t.Errorf("the untracked file should survive: %v", err)
+	}
+}
+
 func TestRefreshMergedBranchRemovesObsoleteSubmodule(t *testing.T) {
 	t.Parallel()
 
@@ -615,6 +643,37 @@ func TestFreezeDepsWaitMergeRefreshesRelease(t *testing.T) {
 	}
 }
 
+// A request branch template that lands on the target, the dev branch or a
+// release branch fails the plan, before the step runs any of its commands.
+func TestMergeRequestReservedSourceFailsThePlan(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct{ template, target string }{
+		{"{branch}", "release-1.0"},
+		{"develop", "release-1.0"},
+		{"release-2.3", "develop"},
+		{"stable", "develop"},
+	} {
+		p := &config.Project{
+			Name: "api", CI: config.CIGitLab, MR: config.MRAlways,
+			DevBranch: "develop", ReleaseBranchPrefix: "release-", ReleaseBranch: "stable",
+		}
+		rctx := &run.Ctx{Cfg: &config.Config{MergeRequest: config.MergeRequest{Branch: tc.template}}}
+
+		if _, err := commitPlanLines(rctx, p, cmdChangelogUpdate, tc.target, "files changed", "msg",
+			false); !errors.Is(err, errMRSourceReserved) {
+			t.Errorf("mr_branch %q into %s: got %v, want errMRSourceReserved", tc.template, tc.target, err)
+		}
+	}
+
+	p := &config.Project{Name: "api", CI: config.CIGitLab, MR: config.MRAlways, DevBranch: "develop"}
+	rctx := &run.Ctx{Cfg: &config.Config{MergeRequest: config.MergeRequest{Branch: "rt/{command}/{branch}"}}}
+
+	if _, err := commitPlanLines(rctx, p, cmdChangelogUpdate, "develop", "files changed", "msg", false); err != nil {
+		t.Errorf("a dedicated source branch must plan: %v", err)
+	}
+}
+
 // The plan says where the commit goes and what the review will ask; a
 // project that cannot open a request is reported by repo check, not at the
 // push.
@@ -626,8 +685,11 @@ func TestMergeRequestPlanAndCheck(t *testing.T) {
 		Branch: "rt/{command}/{branch}/{date}", Title: "{message}",
 	}}}
 
-	lines := commitPlanLines(rctx, p, cmdChangelogUpdate, "release-1.0", "files changed",
+	lines, err := commitPlanLines(rctx, p, cmdChangelogUpdate, "release-1.0", "files changed",
 		"chore: changelog\n\nbody", false)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	want := "commit to rt/changelog-update/release-1.0/" + time.Now().Format(time.DateOnly) +
 		", push, open MR into release-1.0 if files changed"
@@ -680,7 +742,11 @@ func TestMergeRequestPlanAndCheck(t *testing.T) {
 	rctx.Cfg.MergeRequest.Wait = config.MRWaitAlways
 	rctx.Cfg.MergeRequest.SettleSeconds = &settle
 
-	lines = commitPlanLines(rctx, p, cmdChangelogUpdate, "release-1.0", "files changed", "msg", false)
+	lines, err = commitPlanLines(rctx, p, cmdChangelogUpdate, "release-1.0", "files changed", "msg", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	if !strings.Contains(lines[0], "then wait for the MR to be merged (wait: always) and 30s more") {
 		t.Errorf("plan line %q lacks the wait", lines[0])
 	}

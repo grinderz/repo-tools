@@ -307,8 +307,9 @@ usually mentions people. And
 template: a public repository's branches need not carry the work ticket). A rerun on the same day
 rewrites the branch with one
 fresh commit and updates the request already open for it. Use a dedicated
-source branch for each target. The command rejects a source that names the
-target, the project's dev branch, or a release branch. If an open request
+source branch for each target. The plan rejects a source that names the
+target, the project's dev branch, or a release branch, so a dry run reports it
+and no step runs its commands first. If an open request
 already uses the source for a different target, the run stops before the push.
 The diff review shows the request with the message and asks
 once, `Commit, push and open MR into develop?`; a decline leaves the changes
@@ -392,9 +393,11 @@ submodules intentionally kept at their pinned commits. Ignored paths are also
 excluded from automatic derivation, even when their remote is another project
 in the config. A path cannot be both frozen and ignored; `repo check` reports
 ignored paths absent from `.gitmodules` on the release branch.
-When a branch switch or fast-forward changes an ignored pin, `deps freeze`
-and `deps submodules` update its checkout before running dependency commands.
-If that submodule has local changes, the command stops before switching branches,
+When a branch switch or fast-forward changes a submodule pin, `deps freeze`
+and `deps submodules` update that submodule's checkout before running
+dependency commands. This covers ignored submodules and the ones outside the
+freeze list, so the old branch's pin does not end up in the commit. If such a
+submodule has local changes, the command stops before switching branches,
 including with `--allow-dirty`.
 
 **One config per release.** A project may name the release branch it works

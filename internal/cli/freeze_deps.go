@@ -141,13 +141,8 @@ func planFreezeDeps(
 
 	st.Plan = append(st.Plan, presets...)
 
-	// Both halves judge the branch being frozen, not the current checkout: a
-	// release branch may carry no submodules at all while the dev branch does.
-	if frozen, _ := freezeList(rctx, r, p, ref); len(frozen) == 0 {
-		paths, _ := r.SubmodulePathsAt(ref)
-		if slices.ContainsFunc(paths, func(path string) bool { return !slices.Contains(p.IgnoreSubmodules, path) }) {
-			st.Warn = "project has submodules but none are configured for freeze"
-		}
+	if warn := unfrozenWarning(rctx, r, p, ref); warn != "" {
+		st.Warn = warn
 	}
 
 	if !noDeps {
@@ -155,11 +150,33 @@ func planFreezeDeps(
 		st.Plan = append(st.Plan, planDeps(rctx, p, branch)...)
 	}
 
-	st.Plan = append(st.Plan,
-		commitPlanLines(rctx, p, cmdDepsFreeze, branch, "anything changed", freezeMessage(rctx, p, branch), waitMerge)...)
+	commit, err := commitPlanLines(rctx, p, cmdDepsFreeze, branch, "anything changed",
+		freezeMessage(rctx, p, branch), waitMerge)
+	if err != nil {
+		return st, err
+	}
+
+	st.Plan = append(st.Plan, commit...)
 	st.Exec = func() error { return freezeDeps(rctx, p, branch, noDeps, allowDirty, waitMerge) }
 
 	return st, nil
+}
+
+// unfrozenWarning flags a project whose submodules the freeze would leave
+// alone without ignore_submodules saying so. Both halves judge the branch
+// being frozen, not the current checkout: a release branch may carry no
+// submodules at all while the dev branch does.
+func unfrozenWarning(rctx *run.Ctx, r gitx.Repo, p *config.Project, ref string) string {
+	if frozen, _ := freezeList(rctx, r, p, ref); len(frozen) > 0 {
+		return ""
+	}
+
+	paths, _ := r.SubmodulePathsAt(ref)
+	if slices.ContainsFunc(paths, func(path string) bool { return !slices.Contains(p.IgnoreSubmodules, path) }) {
+		return "project has submodules but none are configured for freeze"
+	}
+
+	return ""
 }
 
 // freezeList is what a project freezes: the submodules it lists, or — when it
@@ -351,7 +368,7 @@ func freezeDeps(rctx *run.Ctx, p *config.Project, branch string, noDeps, allowDi
 		return err
 	}
 
-	if err := checkoutDepsBranch(r, branch, p.IgnoreSubmodules); err != nil {
+	if err := checkoutDepsBranch(r, branch); err != nil {
 		return err
 	}
 

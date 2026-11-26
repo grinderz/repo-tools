@@ -174,9 +174,13 @@ func planSubmodules(rctx *run.Ctx, p *config.Project, opts submodulesOpts) (run.
 	if opts.NoCommit {
 		st.Plan = append(st.Plan, "leave the new pins uncommitted")
 	} else {
-		st.Plan = append(st.Plan,
-			commitPlanLines(rctx, p, cmdDepsSubmodules, branch, "any pin moved",
-				submodulesMessage(rctx, p, branch), opts.WaitMerge)...)
+		commit, err := commitPlanLines(rctx, p, cmdDepsSubmodules, branch, "any pin moved",
+			submodulesMessage(rctx, p, branch), opts.WaitMerge)
+		if err != nil {
+			return st, 0, err
+		}
+
+		st.Plan = append(st.Plan, commit...)
 	}
 
 	st.Exec = func() error { return updateSubmodules(rctx, p, branch, targets, opts) }
@@ -293,20 +297,18 @@ func trackedSubmodules(r gitx.Repo, ref string, only []string) ([]submoduleTarge
 	return targets, untracked, nil
 }
 
-// checkoutDepsBranch also brings ignored worktrees to the target branch's pins.
-// Otherwise a clean checkout on the old branch can become a pending pin change
-// which the dependency commit's git add -A would pick up.
-func checkoutDepsBranch(r gitx.Repo, branch string, ignored []string) error {
-	if len(ignored) == 0 {
-		return checkoutTracking(r, branch)
-	}
-
+// checkoutDepsBranch also brings submodule worktrees to the target branch's
+// pins. Otherwise a clean checkout on the old branch can become a pending pin
+// change which the dependency commit's git add -A would pick up. That covers
+// every submodule the command does not move itself: ignored ones, and ones
+// outside the freeze list in a project without deps_freeze.
+func checkoutDepsBranch(r gitx.Repo, branch string) error {
 	ref := branchRef(r, branch)
 	if ref == "" {
 		return checkoutTracking(r, branch)
 	}
 
-	pins, err := changedSubmodulePins(r, ref, ignored)
+	pins, err := changedSubmodulePins(r, ref, nil)
 	if err != nil {
 		return err
 	}
@@ -325,7 +327,7 @@ func checkoutDepsBranch(r gitx.Repo, branch string, ignored []string) error {
 	}
 
 	if status != "" {
-		return fmt.Errorf("cannot switch ignored submodule pins: %w\n%s", errDirty, status)
+		return fmt.Errorf("cannot switch submodule pins: %w\n%s", errDirty, status)
 	}
 
 	if err := checkoutWithoutRemovedPins(r, branch, pins.removed); err != nil || len(pins.updated) == 0 {
@@ -484,7 +486,7 @@ func updateSubmodules(
 		return err
 	}
 
-	if err := checkoutDepsBranch(r, branch, p.IgnoreSubmodules); err != nil {
+	if err := checkoutDepsBranch(r, branch); err != nil {
 		return err
 	}
 

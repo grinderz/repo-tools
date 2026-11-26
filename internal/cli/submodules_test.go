@@ -152,6 +152,42 @@ func TestDepsCommandsKeepIgnoredReleasePin(t *testing.T) {
 	}
 }
 
+// A submodule outside the freeze list and not ignored is somebody else's too:
+// a run started on another branch must not carry that branch's pin over.
+func TestDepsSubmodulesKeepsUnmanagedPinOfTheTarget(t *testing.T) {
+	t.Parallel()
+
+	f, rctx, p := mrFixture(t)
+	p.MR = config.MRNone
+	p.Deps = "snapshot"
+	rctx.Cfg.Cmds.Deps = map[string][]string{"snapshot": {"cat sub/lib.txt > snapshot.txt"}}
+
+	git(t, f.parent, "checkout", "--recurse-submodules", "release-1.0")
+	git(t, f.parent, "submodule", "add", "-b", "develop", f.sub, "managed")
+	commit(t, f.parent, "release: add managed dependency")
+	git(t, f.parent, "push", "origin", "release-1.0")
+	git(t, f.parent, "checkout", "--recurse-submodules", "develop")
+
+	p.Submodules = []config.Submodule{{Path: "managed", FreezeTo: "develop"}}
+
+	step, found, err := planSubmodules(rctx, p, submodulesOpts{Branch: "release-1.0"})
+	if err != nil || found != 1 {
+		t.Fatalf("plan found %d targets: %v", found, err)
+	}
+
+	if err := step.Exec(); err != nil {
+		t.Fatal(err)
+	}
+
+	if pin := git(t, f.parent, "rev-parse", "origin/release-1.0:sub"); pin != f.subRelease {
+		t.Errorf("unmanaged release pin = %s, want %s", pin, f.subRelease)
+	}
+
+	if got := git(t, f.parent, "show", "origin/release-1.0:snapshot.txt"); got != "v1-hotfix" {
+		t.Errorf("dependency command read %q from the unmanaged submodule", got)
+	}
+}
+
 func TestFreezeLeavesRemovedIgnoredPinOffRelease(t *testing.T) {
 	t.Parallel()
 

@@ -187,14 +187,20 @@ func planHash(short string) string { return run.Yellow(short) }
 
 // commitPlanLines describe the commit step: what would be pushed where, and
 // with which message — the message is as much a decision as the diff, and
-// waiting for the prompt to see it is too late in a dry run.
+// waiting for the prompt to see it is too late in a dry run. A request
+// branch the request must not rewrite is an error here, before the step
+// runs its commands, not after.
 func commitPlanLines(
 	rctx *run.Ctx, p *config.Project, command, branch, condition, msg string, waitMerge bool,
-) []string {
+) ([]string, error) {
 	line := fmt.Sprintf("commit+push to %s if %s", planRef("origin/"+branch), condition)
 
 	m := planMergeRequest(rctx, p, command, branch, msg)
 	if m != nil {
+		if err := reservedSource(p, m); err != nil {
+			return nil, err
+		}
+
 		line = m.plan() + " if " + condition
 	}
 
@@ -208,7 +214,7 @@ func commitPlanLines(
 		line += waitPlan(rctx, p, waitMerge)
 	}
 
-	return []string{line, "message: " + planMsg(fmt.Sprintf("%q", msg))}
+	return []string{line, "message: " + planMsg(fmt.Sprintf("%q", msg))}, nil
 }
 
 // updateSubmoduleRemote moves a submodule to the head of the branch it tracks
@@ -758,11 +764,19 @@ const (
 // as many times as needed. An unattended run retries on its own with a pause
 // and gives up after remoteAttempts.
 func remoteGit(rctx *run.Ctx, r gitx.Repo, args ...string) error {
-	var err error
+	_, err := retryRemote(rctx, args[0], func() (string, error) { return r.Git(args...) })
 
+	return err
+}
+
+// retryRemote is remoteGit for a call whose output is needed, such as a
+// read of origin through r.Stdout. name is the git subcommand the messages
+// mention.
+func retryRemote(rctx *run.Ctx, name string, call func() (string, error)) (string, error) {
 	for attempt := 1; ; attempt++ {
-		if _, err = r.Git(args...); err == nil {
-			return nil
+		out, err := call()
+		if err == nil {
+			return out, nil
 		}
 
 		if rctx.Interactive() {
@@ -772,20 +786,20 @@ func remoteGit(rctx *run.Ctx, r gitx.Repo, args ...string) error {
 			fmt.Println(run.Dim(indentLines(gitOutput(err))))
 
 			retry, askErr := run.ConfirmYes(fmt.Sprintf(
-				"git %s failed — touch the key if it was waiting. Retry?", args[0]))
+				"git %s failed — touch the key if it was waiting. Retry?", name))
 			if askErr != nil || !retry {
-				return err
+				return "", err
 			}
 
 			continue
 		}
 
 		if attempt >= remoteAttempts {
-			return err
+			return "", err
 		}
 
 		fmt.Println("    " + run.Dim(fmt.Sprintf("git %s failed (%s), retrying (%d/%d)",
-			args[0], gitReason(err), attempt, remoteAttempts-1)))
+			name, gitReason(err), attempt, remoteAttempts-1)))
 		time.Sleep(remoteRetryPause)
 	}
 }

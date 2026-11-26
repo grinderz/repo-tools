@@ -131,8 +131,12 @@ func planToolchain(rctx *run.Ctx, p *config.Project, opts toolchainOpts) (run.St
 	if opts.NoCommit {
 		st.Plan = append(st.Plan, "leave the changes uncommitted")
 	} else {
-		st.Plan = append(st.Plan,
-			commitPlanLines(rctx, p, cmdDepsToolchain, branch, "anything changed", message, false)...)
+		commit, err := commitPlanLines(rctx, p, cmdDepsToolchain, branch, "anything changed", message, false)
+		if err != nil {
+			return st, err
+		}
+
+		st.Plan = append(st.Plan, commit...)
 	}
 
 	st.Exec = func() error { return bumpToolchain(rctx, p, branch, opts) }

@@ -28,8 +28,14 @@ func newChangelogCmd(rctx *run.Ctx, name string) *cobra.Command {
 			}
 
 			steps := make([]run.Step, 0, len(projects))
+
 			for _, p := range projects {
-				steps = append(steps, planChangelog(rctx, p, branchOverride))
+				st, err := planChangelog(rctx, p, branchOverride)
+				if err != nil {
+					return fmt.Errorf("%s: %w", p.Name, err)
+				}
+
+				steps = append(steps, st)
 			}
 
 			ok, err := rctx.Gate(cmdLabel(cmd), run.Destructive, steps)
@@ -50,7 +56,7 @@ func newChangelogCmd(rctx *run.Ctx, name string) *cobra.Command {
 	return c
 }
 
-func planChangelog(rctx *run.Ctx, p *config.Project, branchOverride string) run.Step {
+func planChangelog(rctx *run.Ctx, p *config.Project, branchOverride string) (run.Step, error) {
 	r := repoOf(p)
 	st := run.Step{Project: p}
 
@@ -58,18 +64,18 @@ func planChangelog(rctx *run.Ctx, p *config.Project, branchOverride string) run.
 	case !p.ChangelogEnabled():
 		st.Skip, st.Warn = true, "changelog is disabled for this project"
 
-		return st
+		return st, nil
 	case missingRepo(r) != "":
 		st.Skip, st.Warn = true, missingRepo(r)
 
-		return st
+		return st, nil
 	}
 
 	branch, err := changelogBranch(r, p, branchOverride)
 	if err != nil {
 		st.Skip, st.Warn = true, err.Error()
 
-		return st
+		return st, nil //nolint:nilerr // the error becomes the skip reason, not a failure
 	}
 
 	st.Plan = append(st.Plan, "checkout "+planRef(branch))
@@ -90,11 +96,16 @@ func planChangelog(rctx *run.Ctx, p *config.Project, branchOverride string) run.
 		st.Plan = append(st.Plan, "run "+cmd)
 	}
 
-	st.Plan = append(st.Plan,
-		commitPlanLines(rctx, p, cmdChangelogUpdate, branch, "files changed", changelogMessage(rctx, p, branch), false)...)
+	commit, err := commitPlanLines(rctx, p, cmdChangelogUpdate, branch, "files changed",
+		changelogMessage(rctx, p, branch), false)
+	if err != nil {
+		return st, err
+	}
+
+	st.Plan = append(st.Plan, commit...)
 	st.Exec = func() error { return runChangelog(rctx, p, branch) }
 
-	return st
+	return st, nil
 }
 
 // changelogBranch resolves which branch the changelog is generated on: the
