@@ -5,7 +5,7 @@ MAKEFLAGS += --warn-undefined-variables
 SHELL := bash
 
 # pinned; `go run` fetches the exact version on demand
-GO_GOLANGCI_LINT_VERSION ?= 2.14.0
+GO_GOLANGCI_LINT_VERSION ?= 2.15.0
 GO_GOLANGCI_LINT_TIMEOUT ?= 10m
 PRE_COMMIT_VERSION ?= 4.7.0
 
